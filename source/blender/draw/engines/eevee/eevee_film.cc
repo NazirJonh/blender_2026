@@ -46,7 +46,7 @@ void Film::init_aovs(const Set<std::string> &passes_used_by_viewport_compositor)
 
   if (inst_.is_viewport()) {
     /* Viewport case. */
-    if (inst_.v3d->shading.render_pass == EEVEE_RENDER_PASS_AOV) {
+    if (inst_.v3d && inst_.view_layer && inst_.v3d->shading.render_pass == EEVEE_RENDER_PASS_AOV) {
       /* AOV display, request only a single AOV. */
       ViewLayerAOV *aov = (ViewLayerAOV *)BLI_findstring(
           &inst_.view_layer->aovs, inst_.v3d->shading.aov_name, offsetof(ViewLayerAOV, name));
@@ -59,7 +59,7 @@ void Film::init_aovs(const Set<std::string> &passes_used_by_viewport_compositor)
       }
     }
 
-    if (inst_.is_viewport_compositor_enabled) {
+    if (inst_.is_viewport_compositor_enabled && inst_.view_layer) {
       LISTBASE_FOREACH (ViewLayerAOV *, aov, &inst_.view_layer->aovs) {
         /* Already added as a display pass. No need to add again. */
         if (!aovs.is_empty() && aovs.last() == aov) {
@@ -74,8 +74,10 @@ void Film::init_aovs(const Set<std::string> &passes_used_by_viewport_compositor)
   }
   else {
     /* Render case. */
-    LISTBASE_FOREACH (ViewLayerAOV *, aov, &inst_.view_layer->aovs) {
-      aovs.append(aov);
+    if (inst_.view_layer) {
+      LISTBASE_FOREACH (ViewLayerAOV *, aov, &inst_.view_layer->aovs) {
+        aovs.append(aov);
+      }
     }
   }
 

@@ -16,12 +16,23 @@
  */
 
 #include "DRW_render.hh"
+#include "draw_view_data.hh"
 
 #include "GPU_debug.hh"
+#include "GPU_texture.hh"
 
 #include "eevee_instance.hh"
 
 #include "eevee_view.hh"
+
+/* Debug flag for UV Checker. Define UV_CHECKER_DEBUG to enable debug printf output. */
+#ifndef UV_CHECKER_DEBUG_PRINT
+#  ifdef UV_CHECKER_DEBUG
+#    define UV_CHECKER_DEBUG_PRINT(...) printf(__VA_ARGS__)
+#  else
+#    define UV_CHECKER_DEBUG_PRINT(...) ((void)0)
+#  endif
+#endif
 
 namespace blender::eevee {
 
@@ -158,7 +169,27 @@ void ShadingView::render()
   inst_.planar_probes.viewport_draw(render_view_, combined_fb_);
 
   gpu::Texture *combined_final_tx = render_postfx(rbufs.combined_tx);
+  if (combined_final_tx == nullptr) {
+    combined_final_tx = rbufs.combined_tx;
+  }
+  
   inst_.film.accumulate(jitter_view_, combined_final_tx);
+  
+  /* UV Checker overlay после Film. Используем сценовый depth_tx и финальный viewport color. */
+  UV_CHECKER_DEBUG_PRINT("[UV Checker EEVEE] eevee_view.cc: Checking postfx_enabled() before overlay\n");
+  if (inst_.uv_checker.postfx_enabled()) {
+    DefaultTextureList *dtxl = inst_.draw_ctx->viewport_texture_list_get();
+    /* Цвет: финальный Film (dtxl->color), глубина: сценовая rbufs.depth_tx (совпадает с геометрией). */
+    Framebuffer overlay_fb;
+    overlay_fb.ensure(GPU_ATTACHMENT_TEXTURE(rbufs.depth_tx),
+                      GPU_ATTACHMENT_TEXTURE(dtxl->color));
+    UV_CHECKER_DEBUG_PRINT("[UV Checker EEVEE] eevee_view.cc: Rendering UV Checker overlay (post-film)\n");
+    inst_.uv_checker.render(render_view_, overlay_fb, &rbufs.depth_tx);
+    UV_CHECKER_DEBUG_PRINT("[UV Checker EEVEE] eevee_view.cc: UV Checker render completed (post-film)\n");
+  }
+  else {
+    UV_CHECKER_DEBUG_PRINT("[UV Checker EEVEE] eevee_view.cc: postfx_enabled() returned false, skipping overlay\n");
+  }
 
   rbufs.release();
   postfx_tx_.release();

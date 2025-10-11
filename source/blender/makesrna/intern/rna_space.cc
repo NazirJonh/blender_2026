@@ -5343,6 +5343,80 @@ static void rna_def_space_view3d_overlay(BlenderRNA *brna)
   RNA_def_property_boolean_sdna(prop, nullptr, "debug_flag", V3D_DEBUG_FREEZE_CULLING);
   RNA_def_property_ui_text(prop, "Freeze Culling", "Freeze view culling bounds");
   RNA_def_property_update(prop, NC_SPACE | ND_SPACE_VIEW3D, nullptr);
+
+  /* UV Checker overlay */
+  prop = RNA_def_property(srna, "show_uv_checker", PROP_BOOLEAN, PROP_NONE);
+  RNA_def_property_boolean_sdna(prop, nullptr, "overlay.uv_checker_enabled", 1);
+  RNA_def_property_ui_text(
+      prop,
+      "UV Checker",
+      "Display a checker pattern overlay to visualize UV layout and texel density");
+  RNA_def_property_update(prop, NC_SPACE | ND_SPACE_VIEW3D, nullptr);
+
+  static const EnumPropertyItem uv_checker_source_items[] = {
+      {V3D_UV_CHECKER_SOURCE_PROCEDURAL,
+       "PROCEDURAL",
+       0,
+       "Procedural",
+       "Use a procedurally generated checker pattern"},
+      {V3D_UV_CHECKER_SOURCE_IMAGE,
+       "IMAGE",
+       0,
+       "Image",
+       "Use a custom image texture for the checker pattern"},
+      {0, nullptr, 0, nullptr, nullptr},
+  };
+
+  prop = RNA_def_property(srna, "uv_checker_source", PROP_ENUM, PROP_NONE);
+  RNA_def_property_enum_sdna(prop, nullptr, "overlay.uv_checker_source");
+  RNA_def_property_enum_items(prop, uv_checker_source_items);
+  RNA_def_property_ui_text(
+      prop, "UV Checker Source", "Source of the checker pattern texture");
+  RNA_def_property_update(prop, NC_SPACE | ND_SPACE_VIEW3D, nullptr);
+
+  prop = RNA_def_property(srna, "uv_checker_scale", PROP_FLOAT, PROP_NONE);
+  RNA_def_property_float_sdna(prop, nullptr, "overlay.uv_checker_scale");
+  RNA_def_property_range(prop, 0.1f, 100.0f);
+  RNA_def_property_ui_range(prop, 1.0f, 32.0f, 1.0f, 1);
+  RNA_def_property_ui_text(
+      prop, "UV Checker Scale", "Scale of the checker pattern (higher values = more repetitions)");
+  RNA_def_property_update(prop, NC_SPACE | ND_SPACE_VIEW3D, nullptr);
+
+  prop = RNA_def_property(srna, "uv_checker_opacity", PROP_FLOAT, PROP_FACTOR);
+  RNA_def_property_float_sdna(prop, nullptr, "overlay.uv_checker_opacity");
+  RNA_def_property_range(prop, 0.0f, 1.0f);
+  RNA_def_property_ui_text(prop, "UV Checker Opacity", "Opacity of the UV checker overlay");
+  RNA_def_property_update(prop, NC_SPACE | ND_SPACE_VIEW3D, nullptr);
+
+  prop = RNA_def_property(srna, "uv_checker_image", PROP_POINTER, PROP_NONE);
+  RNA_def_property_pointer_sdna(prop, nullptr, "overlay.uv_checker_image");
+  RNA_def_property_struct_type(prop, "Image");
+  RNA_def_property_flag(prop, PROP_EDITABLE);
+  RNA_def_property_ui_text(prop,
+                           "UV Checker Image",
+                           "Custom image to use as the UV checker pattern (when source is Image)");
+  RNA_def_property_update(prop, NC_SPACE | ND_SPACE_VIEW3D, nullptr);
+
+  static const EnumPropertyItem uv_checker_lighting_items[] = {
+      {V3D_UV_CHECKER_LIGHTING_UNLIT,
+       "UNLIT",
+       0,
+       "Unlit",
+       "Display checker pattern with flat shading (no scene lighting)"},
+      {V3D_UV_CHECKER_LIGHTING_LIT,
+       "LIT",
+       0,
+       "Lit",
+       "Display checker pattern with scene lighting applied"},
+      {0, nullptr, 0, nullptr, nullptr},
+  };
+
+  prop = RNA_def_property(srna, "uv_checker_lighting", PROP_ENUM, PROP_NONE);
+  RNA_def_property_enum_sdna(prop, nullptr, "overlay.uv_checker_lighting");
+  RNA_def_property_enum_items(prop, uv_checker_lighting_items);
+  RNA_def_property_ui_text(
+      prop, "UV Checker Lighting", "Lighting mode for UV checker overlay");
+  RNA_def_property_update(prop, NC_SPACE | ND_SPACE_VIEW3D, nullptr);
 }
 
 static void rna_def_space_view3d(BlenderRNA *brna)

@@ -94,6 +94,7 @@ class Instance : public DrawEngine {
     LightProbes light_probes = {selection_type_};
     Meshes meshes;
     MeshUVs mesh_uvs;
+    UVChecker uv_checker;
     Metaballs metaballs = {selection_type_};
     ModeTransfer mode_transfer;
     Names names;

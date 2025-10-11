@@ -509,6 +509,7 @@ class ShaderModule {
   StaticShader uv_analysis_stretch_angle = {"overlay_edit_uv_stretching_angle"};
   StaticShader uv_analysis_stretch_area = {"overlay_edit_uv_stretching_area"};
   StaticShader uv_brush_stencil = {"overlay_edit_uv_stencil_image"};
+  StaticShader uv_checker = {"overlay_uv_checker"};
   StaticShader uv_edit_edge = {"overlay_edit_uv_edges"};
   StaticShader uv_edit_face = {"overlay_edit_uv_faces"};
   StaticShader uv_edit_facedot = {"overlay_edit_uv_face_dots"};

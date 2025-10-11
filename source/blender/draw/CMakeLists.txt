@@ -97,6 +97,7 @@ set(SRC
   engines/eevee/eevee_depth_of_field.cc
   engines/eevee/eevee_engine.cc
   engines/eevee/eevee_film.cc
+  engines/eevee/eevee_uv_checker.cc
   engines/eevee/eevee_hizbuffer.cc
   engines/eevee/eevee_instance.cc
   engines/eevee/eevee_light.cc
@@ -193,6 +194,7 @@ set(SRC
   engines/eevee/eevee_engine.h
   engines/eevee/eevee_film.hh
   engines/eevee/eevee_gbuffer.hh
+  engines/eevee/eevee_uv_checker.hh
   engines/eevee/eevee_hizbuffer.hh
   engines/eevee/eevee_instance.hh
   engines/eevee/eevee_light.hh
@@ -324,6 +326,7 @@ set(GLSL_SRC
   engines/eevee/shaders/infos/eevee_deferred_infos.hh
   engines/eevee/shaders/infos/eevee_depth_of_field_infos.hh
   engines/eevee/shaders/infos/eevee_film_infos.hh
+  engines/eevee/shaders/infos/eevee_uv_checker_infos.hh
   engines/eevee/shaders/infos/eevee_hiz_infos.hh
   engines/eevee/shaders/infos/eevee_light_culling_infos.hh
   engines/eevee/shaders/infos/eevee_lightprobe_sphere_infos.hh
@@ -412,6 +415,8 @@ set(GLSL_SRC
   engines/eevee/shaders/eevee_depth_of_field_setup_comp.glsl
   engines/eevee/shaders/eevee_depth_of_field_stabilize_comp.glsl
   engines/eevee/shaders/eevee_depth_of_field_tiles_dilate_comp.glsl
+  engines/eevee/shaders/eevee_uv_checker_overlay_vert.glsl
+  engines/eevee/shaders/eevee_uv_checker_overlay_frag.glsl
   engines/eevee/shaders/eevee_depth_of_field_tiles_flatten_comp.glsl
   engines/eevee/shaders/eevee_display_lightprobe_volume_frag.glsl
   engines/eevee/shaders/eevee_display_lightprobe_volume_vert.glsl
@@ -570,6 +575,7 @@ set(GLSL_SRC
   engines/eevee/eevee_depth_of_field_shared.hh
   engines/eevee/eevee_film_shared.hh
   engines/eevee/eevee_hizbuffer_shared.hh
+  engines/eevee/eevee_uv_checker_shared.hh
   engines/eevee/eevee_light_shared.hh
   engines/eevee/eevee_lightprobe_shared.hh
   engines/eevee/eevee_motion_blur_shared.hh
@@ -750,6 +756,8 @@ set(GLSL_SRC
   engines/overlay/shaders/overlay_edit_uv_tiled_image_borders_vert.glsl
   engines/overlay/shaders/overlay_edit_uv_verts_frag.glsl
   engines/overlay/shaders/overlay_edit_uv_verts_vert.glsl
+  engines/overlay/shaders/overlay_uv_checker_frag.glsl
+  engines/overlay/shaders/overlay_uv_checker_vert.glsl
   engines/overlay/shaders/overlay_extra_frag.glsl
   engines/overlay/shaders/overlay_extra_groundline_vert.glsl
   engines/overlay/shaders/overlay_extra_lightprobe_grid_vert.glsl

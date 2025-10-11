@@ -7121,6 +7121,68 @@ class VIEW3D_PT_overlay_geometry(Panel):
         # sub.prop(overlay, "show_onion_skins")
 
 
+class VIEW3D_PT_overlay_uv_checker(Panel):
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'HEADER'
+    bl_parent_id = "VIEW3D_PT_overlay"
+    bl_label = "UV Checker"
+
+    def draw_header(self, context):
+        layout = self.layout
+        view = context.space_data
+        overlay = view.overlay
+        display_all = overlay.show_overlays
+
+        layout.active = display_all
+        layout.prop(overlay, "show_uv_checker", text="")
+
+    def draw(self, context):
+        layout = self.layout
+        view = context.space_data
+        overlay = view.overlay
+        display_all = overlay.show_overlays
+
+        layout.active = display_all and overlay.show_uv_checker
+
+        col = layout.column(align=True)
+        col.prop(overlay, "uv_checker_source", text="Source")
+        
+        if overlay.uv_checker_source == 'IMAGE':
+            col.template_ID(overlay, "uv_checker_image", open="image.open")
+        
+        row = col.row(align=True)
+        row.prop(overlay, "uv_checker_scale", text="Scale", slider=True)
+        
+        row = col.row(align=True)
+        row.prop(overlay, "uv_checker_opacity", text="Opacity", slider=True)
+        
+        # Lighting mode (available in Material Preview/EEVEE mode)
+        col.separator()
+        row = col.row(align=True)
+        row.prop(overlay, "uv_checker_lighting", expand=True)
+        # Only enable lighting control in Material Preview mode
+        row.enabled = view.shading.type == 'MATERIAL'
+        
+        # Show warning if values are too low
+        if overlay.uv_checker_opacity <= 0.0 or overlay.uv_checker_scale <= 0.0:
+            box = layout.box()
+            col_warn = box.column()
+            if overlay.uv_checker_opacity <= 0.0:
+                col_warn.label(text="Opacity is 0!", icon='ERROR')
+            if overlay.uv_checker_scale <= 0.0:
+                col_warn.label(text="Scale is 0!", icon='ERROR')
+            # Add reset buttons
+            row_reset = col_warn.row(align=True)
+            if overlay.uv_checker_opacity <= 0.0:
+                op = row_reset.operator("wm.context_set_float", text="Reset Opacity")
+                op.data_path = "space_data.overlay.uv_checker_opacity"
+                op.value = 0.75
+            if overlay.uv_checker_scale <= 0.0:
+                op = row_reset.operator("wm.context_set_float", text="Reset Scale")
+                op.data_path = "space_data.overlay.uv_checker_scale"
+                op.value = 8.0
+
+
 class VIEW3D_PT_overlay_viewer_node(Panel):
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'HEADER'
@@ -9346,6 +9408,7 @@ classes = (
     VIEW3D_PT_overlay_guides,
     VIEW3D_PT_overlay_object,
     VIEW3D_PT_overlay_geometry,
+    VIEW3D_PT_overlay_uv_checker,
     VIEW3D_PT_overlay_viewer_node,
     VIEW3D_PT_overlay_motion_tracking,
     VIEW3D_PT_overlay_edit_mesh,

@@ -467,6 +467,7 @@ void Instance::begin_sync()
     layer.metaballs.begin_sync(resources, state);
     layer.meshes.begin_sync(resources, state);
     layer.mesh_uvs.begin_sync(resources, state);
+    layer.uv_checker.begin_sync(resources, state);
     layer.mode_transfer.begin_sync(resources, state);
     layer.names.begin_sync(resources, state);
     layer.paints.begin_sync(resources, state);
@@ -636,6 +637,10 @@ void Instance::object_sync(ObjectRef &ob_ref, Manager &manager)
     layer.fade.object_sync(manager, ob_ref, resources, state);
     layer.force_fields.object_sync(manager, ob_ref, resources, state);
     layer.fluids.object_sync(manager, ob_ref, resources, state);
+    /* UV Checker overlay for 3D Viewport (works in all modes). */
+    if (ob_ref.object->type == OB_MESH) {
+      layer.uv_checker.object_sync(manager, ob_ref, resources, state);
+    }
     layer.particles.object_sync(manager, ob_ref, resources, state);
     layer.relations.object_sync(manager, ob_ref, resources, state);
     layer.axes.object_sync(manager, ob_ref, resources, state);
@@ -924,6 +929,10 @@ void Instance::draw_v3d(Manager &manager, View &view)
 
     /* Here because of custom order of regular.facing. */
     infront.facing.draw(resources.overlay_fb, manager, view);
+    
+    /* UV Checker overlay - draw after facing to ensure correct depth. */
+    regular.uv_checker.draw(resources.overlay_fb, manager, view);
+    infront.uv_checker.draw(resources.overlay_in_front_fb, manager, view);
 
     draw(infront, resources.overlay_in_front_fb);
     draw_line(infront, resources.overlay_line_in_front_fb);

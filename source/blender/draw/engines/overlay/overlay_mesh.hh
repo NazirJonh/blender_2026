@@ -12,6 +12,7 @@
 
 #include "BKE_customdata.hh"
 #include "BKE_editmesh.hh"
+#include "BKE_image.hh"
 #include "BKE_mask.h"
 #include "BKE_mesh_types.hh"
 #include "BKE_paint.hh"
@@ -20,18 +21,32 @@
 #include "DEG_depsgraph_query.hh"
 
 #include "DNA_brush_types.h"
+#include "DNA_image_types.h"
 #include "DNA_mask_types.h"
 #include "DNA_mesh_types.h"
 #include "DNA_userdef_types.h"
 
 #include "ED_view3d.hh"
 
+#include "BLI_string.h"
+
 #include "GPU_capabilities.hh"
+#include "GPU_vertex_buffer.hh"
+#include "GPU_vertex_format.hh"
 
 #include "draw_cache.hh"
 #include "draw_cache_impl.hh"
 #include "draw_manager_text.hh"
 #include "overlay_base.hh"
+
+/* Debug flag for UV Checker. Define UV_CHECKER_DEBUG to enable debug printf output. */
+#ifndef UV_CHECKER_DEBUG_PRINT
+#  ifdef UV_CHECKER_DEBUG
+#    define UV_CHECKER_DEBUG_PRINT(...) printf(__VA_ARGS__)
+#  else
+#    define UV_CHECKER_DEBUG_PRINT(...) ((void)0)
+#  endif
+#endif
 
 namespace blender::draw::overlay {
 
@@ -1118,6 +1133,238 @@ class MeshUVs : Overlay {
         gpu::TextureFormat::SFLOAT_16, int2(width, height), GPU_TEXTURE_USAGE_SHADER_READ, buffer);
 
     MEM_freeN(buffer);
+  }
+};
+
+/**
+ * UV Checker overlay for visualizing UV layouts and texel density.
+ * Displays a checker pattern (procedural or image-based) mapped to UV coordinates.
+ */
+class UVChecker : Overlay {
+ private:
+  PassSimple uv_checker_ps_ = {"UV Checker"};
+  bool enabled_ = false;
+  bool use_eevee_ = false;
+  bool use_lighting_ = false;
+  float checker_scale_ = 8.0f;
+  float checker_opacity_ = 0.75f;
+  int checker_source_ = 0;
+  ::Image *checker_image_ = nullptr;
+
+ public:
+  void begin_sync(Resources &res, const State &state) final
+  {
+    /* UV Checker works in:
+     * - Solid/Wireframe modes (Overlay engine - this code)
+     * - Material Preview mode (EEVEE engine - separate implementation in eevee_uv_checker.cc)
+     * 
+     * In Overlay engine, ONLY enable for Solid/Wireframe to avoid conflicts with EEVEE.
+     * EEVEE has its own UV Checker module that renders as post-process overlay.
+     * 
+     * Disable for:
+     * - Selection passes
+     * - Material Preview mode (handled by EEVEE module, not Overlay)
+     * - Rendered mode (conflicts with Cycles)
+     * - Preview rendering contexts
+     * - Image editor / UV editor space
+     * - Render contexts
+     * - Depth only drawing
+     */
+    const bool is_viewport_3d = state.v3d && !state.is_space_image() && 
+                                (state.space_type == SPACE_VIEW3D);
+    const bool is_solid_mode_only = state.v3d && (state.v3d->shading.type <= OB_SOLID);
+    const bool is_interactive = !state.is_image_render && 
+                                !state.is_viewport_image_render &&
+                                !state.is_material_select &&
+                                !state.is_depth_only_drawing &&
+                                !res.is_selection();
+    
+    /* IMPORTANT: DISABLED in Overlay engine!
+     * UV Checker is now ONLY handled by EEVEE module (eevee_uv_checker.cc)
+     * for BOTH Solid and Material Preview modes.
+     * 
+     * This avoids mesh cache conflicts that caused crashes when switching modes.
+     * The EEVEE module safely renders UV Checker as post-process overlay. */
+    enabled_ = false;
+
+    /* Overlay engine does NOT render UV Checker in EEVEE mode. */
+    use_eevee_ = false;
+    
+    ("[UV Checker] begin_sync: enabled=%d, v3d=%p, space=%d, is_3d=%d, solid=%d, interact=%d, select=%d\n",
+           enabled_, 
+           (void*)state.v3d,
+           state.space_type,
+           is_viewport_3d,
+           is_solid_mode_only,
+           is_interactive,
+           res.is_selection());
+
+    if (!enabled_) {
+      return;
+    }
+
+    /* Read settings from overlay configuration. */
+    checker_scale_ = state.v3d->overlay.uv_checker_scale;
+    checker_opacity_ = state.v3d->overlay.uv_checker_opacity;
+    checker_source_ = state.v3d->overlay.uv_checker_source;
+    checker_image_ = state.v3d->overlay.uv_checker_image;
+    use_lighting_ = (state.v3d->overlay.uv_checker_lighting != 0);
+
+    ("[UV Checker] Settings: scale=%.2f, opacity=%.2f, source=%d, image=%p, lighting=%d\n",
+           checker_scale_, checker_opacity_, checker_source_, (void*)checker_image_, use_lighting_);
+
+    /* Validate and clamp values to safe ranges. */
+    if (checker_scale_ < 0.1f) {
+      ("[UV Checker] WARNING: scale too low (%.2f), clamping to 0.1\n", checker_scale_);
+      checker_scale_ = 0.1f;
+    }
+    
+    /* Skip if opacity is zero or negative. */
+    if (checker_opacity_ <= 0.0f) {
+      ("[UV Checker] Disabled: opacity is zero or negative (%.2f)\n", checker_opacity_);
+      ("[UV Checker] HINT: Increase 'UV Checker Opacity' slider in Overlays panel!\n");
+      enabled_ = false;
+      return;
+    }
+
+    /* Initialize rendering pass. */
+    auto &pass = uv_checker_ps_;
+    pass.init();
+    
+    /* Always enable backface culling for UV checker to prevent drawing on reverse sides.
+     * UV mapping is meant to be viewed from the front face only. */
+    
+    /* Use DEPTH_LESS_EQUAL with a small polygon offset to ensure overlay draws on top
+     * of the mesh surface without z-fighting. */
+    pass.state_set(DRW_STATE_WRITE_COLOR | DRW_STATE_BLEND_ALPHA | 
+                   DRW_STATE_CULL_BACK | DRW_STATE_DEPTH_LESS_EQUAL);
+    pass.shader_set(res.shaders->uv_checker.get());
+    
+    ("[UV Checker] Render state: cull_back=ON, depth_test=LESS_EQUAL, blend=ALPHA\n");
+
+    /* Validate and bind checker image if using custom texture. */
+    int actual_source = checker_source_;
+    gpu::Texture *bound_texture = nullptr;
+    
+    if (checker_source_ != 0) {
+      if (checker_image_ && (checker_image_->type == IMA_TYPE_IMAGE)) {
+        gpu::Texture *tex = BKE_image_get_gpu_texture(checker_image_, nullptr);
+        if (tex) {
+          bound_texture = tex;
+        }
+        else {
+          /* Texture not loaded, fallback to procedural. */
+          actual_source = 0;
+        }
+      }
+      else {
+        /* Invalid image, fallback to procedural. */
+        actual_source = 0;
+      }
+    }
+
+    /* Always bind a texture to the sampler to avoid undefined behavior.
+     * Use dummy depth texture if no checker image is available. */
+    if (bound_texture) {
+      pass.bind_texture("checker_image", bound_texture);
+    }
+    else {
+      pass.bind_texture("checker_image", res.dummy_depth_tx);
+    }
+
+    /* Set shader constants. */
+    pass.push_constant("checker_scale", checker_scale_);
+    pass.push_constant("checker_opacity", checker_opacity_);
+    pass.push_constant("use_image", actual_source);
+    pass.push_constant("use_lighting", use_lighting_ ? 1 : 0);
+  }
+
+  void object_sync(Manager &manager,
+                   const ObjectRef &ob_ref,
+                   Resources & /*res*/,
+                   const State &state) final
+  {
+    if (!enabled_) {
+      return;
+    }
+    
+    if (ob_ref.object->type != OB_MESH) {
+      return;
+    }
+
+    Object *ob = ob_ref.object;
+    Mesh &mesh = DRW_object_get_data_for_drawing<Mesh>(*ob);
+    
+    const bool in_edit_mode = (ob->mode == OB_MODE_EDIT);
+    const bool in_paint_mode = (ob->mode == OB_MODE_TEXTURE_PAINT) || 
+                               (ob->mode == OB_MODE_VERTEX_PAINT) ||
+                               (ob->mode == OB_MODE_WEIGHT_PAINT);
+
+    /* Check if object has UV data.
+     * In edit mode, check both edit mesh and base mesh. */
+    int uv_layer = -1;
+    if (in_edit_mode && mesh.runtime->edit_mesh.get()) {
+      BMEditMesh *em = mesh.runtime->edit_mesh.get();
+      uv_layer = CustomData_get_active_layer(&em->bm->ldata, CD_PROP_FLOAT2);
+      ("[UV Checker] Object '%s' (EDIT MODE): BMesh UV layer index %d\n", 
+             ob->id.name + 2, uv_layer);
+    }
+    else {
+      uv_layer = CustomData_get_active_layer(&mesh.corner_data, CD_PROP_FLOAT2);
+      ("[UV Checker] Object '%s' (OBJECT MODE): Mesh UV layer index %d\n", 
+             ob->id.name + 2, uv_layer);
+    }
+    
+    if (uv_layer == -1) {
+      ("[UV Checker] Object '%s' has no UV data\n", ob->id.name + 2);
+      return;
+    }
+
+    ResourceHandleRange res_handle = manager.unique_handle(ob_ref);
+
+    /* Use texpaint batch which guarantees UV attributes are present.
+     * This is safe in Solid mode and doesn't conflict with render engines. */
+    gpu::Batch *geom = DRW_mesh_batch_cache_get_surface_texpaint_single(*ob, mesh);
+    
+    if (!geom) {
+      ("[UV Checker] No texpaint batch available for object '%s'\n", ob->id.name + 2);
+      return;
+    }
+    
+    /* Debug: Verify batch has UV attributes. */
+    if (geom->verts[0]) {
+      const GPUVertFormat *format = GPU_vertbuf_get_format(geom->verts[0]);
+      ("[UV Checker] Batch format: %d attributes\n", format->attr_len);
+      for (int i = 0; i < format->attr_len; i++) {
+        const GPUVertAttr *attr = &format->attrs[i];
+        const char *attr_name = GPU_vertformat_attr_name_get(format, attr, 0);
+        ("[UV Checker]   Attr[%d]: name='%s', offset=%d\n", i, attr_name, attr->offset);
+      }
+    }
+    
+    ("[UV Checker] Drawing batch for object '%s', batch=%p, mode=%s\n", 
+           ob->id.name + 2, (void*)geom, 
+           in_edit_mode ? "EDIT" : (in_paint_mode ? "PAINT" : "OBJECT"));
+    uv_checker_ps_.draw(geom, res_handle);
+  }
+
+  void end_sync(Resources & /*res*/, const State & /*state*/) final
+  {
+    /* Nothing to do here for now. */
+  }
+
+  void draw(Framebuffer &framebuffer, Manager &manager, View &view) final
+  {
+    if (!enabled_) {
+      return;
+    }
+
+    ("[UV Checker] draw() called\n");
+
+    GPU_debug_group_begin("UV Checker");
+    GPU_framebuffer_bind(framebuffer);
+    manager.submit(uv_checker_ps_, view);
+    GPU_debug_group_end();
   }
 };
 

@@ -262,6 +262,15 @@ typedef struct View3DOverlay {
 
   /** Curves sculpt mode settings. */
   float sculpt_curves_cage_opacity;
+
+  /** UV Checker overlay settings. */
+  float uv_checker_scale;
+  float uv_checker_opacity;
+  char uv_checker_enabled;
+  char uv_checker_source;
+  char uv_checker_lighting;
+  char _pad_uv[5];
+  struct Image *uv_checker_image;
 } View3DOverlay;
 
 /** #View3DOverlay.handle_display */

@@ -173,6 +173,10 @@ ShaderGroups ShaderModule::static_shaders_load(const ShaderGroups request_bits,
     request(HORIZON_SCAN_SHADERS, AS_SPAN(shader_list));
   }
   {
+    const eShaderType shader_list[] = {UV_CHECKER_OVERLAY};
+    request(UV_CHECKER_SHADERS, AS_SPAN(shader_list));
+  }
+  {
     const eShaderType shader_list[] = {LIGHT_CULLING_DEBUG,
                                        LIGHT_CULLING_SELECT,
                                        LIGHT_CULLING_SORT,
@@ -555,6 +559,8 @@ const char *ShaderModule::static_shader_create_info_name_get(eShaderType shader_
       return "eevee_volume_scatter";
     case VOLUME_SCATTER_WITH_LIGHTS:
       return "eevee_volume_scatter_with_lights";
+    case UV_CHECKER_OVERLAY:
+      return "eevee_uv_checker_overlay";
     /* To avoid compiler warning about missing case. */
     case MAX_SHADER_TYPE:
       return "";

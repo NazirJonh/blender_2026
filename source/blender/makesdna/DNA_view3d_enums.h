@@ -44,3 +44,15 @@ typedef enum eV3DShadingBackgroundType {
   V3D_SHADING_BACKGROUND_WORLD = 1,
   V3D_SHADING_BACKGROUND_VIEWPORT = 2,
 } eV3DShadingBackgroundType;
+
+/** #View3DOverlay.uv_checker_source */
+typedef enum eV3DUVCheckerSource {
+  V3D_UV_CHECKER_SOURCE_PROCEDURAL = 0,
+  V3D_UV_CHECKER_SOURCE_IMAGE = 1,
+} eV3DUVCheckerSource;
+
+/** #View3DOverlay.uv_checker_lighting */
+typedef enum eV3DUVCheckerLighting {
+  V3D_UV_CHECKER_LIGHTING_UNLIT = 0,
+  V3D_UV_CHECKER_LIGHTING_LIT = 1,
+} eV3DUVCheckerLighting;

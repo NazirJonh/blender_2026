@@ -164,6 +164,8 @@ enum eShaderType {
   VOLUME_SCATTER,
   VOLUME_SCATTER_WITH_LIGHTS,
 
+  UV_CHECKER_OVERLAY,
+
   MAX_SHADER_TYPE,
 };
 
@@ -196,8 +198,9 @@ enum ShaderGroups : uint32_t {
   WORLD_SHADERS = 1 << 19,
   MATERIAL_SHADERS = 1 << 20,
   VOLUME_PROBE_SHADERS = 1 << 21,
+  UV_CHECKER_SHADERS = 1 << 22,
 };
-ENUM_OPERATORS(ShaderGroups, VOLUME_PROBE_SHADERS)
+ENUM_OPERATORS(ShaderGroups, UV_CHECKER_SHADERS)
 
 /**
  * Shader module. shared between instances.

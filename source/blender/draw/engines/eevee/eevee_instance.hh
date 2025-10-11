@@ -50,6 +50,7 @@
 #include "eevee_shadow.hh"
 #include "eevee_subsurface.hh"
 #include "eevee_sync.hh"
+#include "eevee_uv_checker.hh"
 #include "eevee_view.hh"
 #include "eevee_volume.hh"
 #include "eevee_world.hh"
@@ -107,6 +108,7 @@ class Instance : public DrawEngine {
   VelocityModule velocity;
   MotionBlurModule motion_blur;
   DepthOfField depth_of_field;
+  UVChecker uv_checker;
   Cryptomatte cryptomatte;
   GBuffer gbuffer;
   HiZBuffer hiz_buffer;
@@ -187,10 +189,11 @@ class Instance : public DrawEngine {
         lights(*this),
         ambient_occlusion(*this, uniform_data.data.ao),
         raytracing(*this, uniform_data.data.raytrace),
-        velocity(*this),
-        motion_blur(*this),
-        depth_of_field(*this),
-        cryptomatte(*this),
+      velocity(*this),
+      motion_blur(*this),
+      depth_of_field(*this),
+      uv_checker(*this),
+      cryptomatte(*this),
         hiz_buffer(*this, uniform_data.data.hiz),
         sampling(*this, uniform_data.data.clamp),
         camera(*this, uniform_data.data.camera),

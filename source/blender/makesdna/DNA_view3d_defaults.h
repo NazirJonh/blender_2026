@@ -69,6 +69,13 @@
     .gpencil_grid_subdivisions = 4, \
     .gpencil_vertex_paint_opacity = 1.0f, \
     .normals_constant_screen_size = 7.0f, \
+ \
+    .uv_checker_enabled = false, \
+    .uv_checker_source = V3D_UV_CHECKER_SOURCE_PROCEDURAL, \
+    .uv_checker_lighting = V3D_UV_CHECKER_LIGHTING_UNLIT, \
+    .uv_checker_scale = 8.0f, \
+    .uv_checker_opacity = 0.75f, \
+    .uv_checker_image = NULL, \
   }
 
 #define _DNA_DEFAULT_View3DCursor \

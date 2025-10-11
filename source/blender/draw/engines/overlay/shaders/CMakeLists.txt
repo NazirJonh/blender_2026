@@ -67,6 +67,7 @@ set(SRC_GLSL_VERT
   overlay_edit_uv_stretching_vert.glsl
   overlay_edit_uv_tiled_image_borders_vert.glsl
   overlay_edit_uv_verts_vert.glsl
+  overlay_uv_checker_vert.glsl
   overlay_extra_groundline_vert.glsl
   overlay_extra_lightprobe_grid_vert.glsl
   overlay_extra_loose_point_vert.glsl
@@ -120,6 +121,7 @@ set(SRC_GLSL_FRAG
   overlay_edit_uv_edges_frag.glsl
   overlay_edit_uv_image_mask_frag.glsl
   overlay_edit_uv_verts_frag.glsl
+  overlay_uv_checker_frag.glsl
   overlay_extra_frag.glsl
   overlay_extra_loose_point_frag.glsl
   overlay_extra_wire_frag.glsl

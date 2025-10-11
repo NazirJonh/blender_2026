@@ -27,6 +27,7 @@
 #include "ED_view3d.hh"
 #include "GPU_context.hh"
 #include "GPU_pass.hh"
+#include "GPU_framebuffer.hh"
 #include "IMB_imbuf_types.hh"
 
 #include "RE_pipeline.h"
@@ -38,6 +39,15 @@
 #include "draw_context_private.hh"
 #include "draw_debug.hh"
 #include "draw_view_data.hh"
+
+/* Debug flag for UV Checker. Define UV_CHECKER_DEBUG to enable debug printf output. */
+#ifndef UV_CHECKER_DEBUG_PRINT
+#  ifdef UV_CHECKER_DEBUG
+#    define UV_CHECKER_DEBUG_PRINT(...) printf(__VA_ARGS__)
+#  else
+#    define UV_CHECKER_DEBUG_PRINT(...) ((void)0)
+#  endif
+#endif
 
 namespace blender::eevee {
 
@@ -199,6 +209,7 @@ void Instance::init(const int2 &output_res,
   velocity.init();
   raytracing.init();
   depth_of_field.init();
+  uv_checker.init();
   shadows.init();
   motion_blur.init();
   main_view.init();
@@ -213,7 +224,7 @@ void Instance::init(const int2 &output_res,
   /* Request static shaders */
   ShaderGroups shader_request = DEFERRED_LIGHTING_SHADERS | SHADOW_SHADERS | FILM_SHADERS |
                                 HIZ_SHADERS | SPHERE_PROBE_SHADERS | VOLUME_PROBE_SHADERS |
-                                LIGHT_CULLING_SHADERS;
+                                LIGHT_CULLING_SHADERS | UV_CHECKER_SHADERS;  /* UV Checker always loaded */
   SET_FLAG_FROM_TEST(shader_request, depth_of_field.enabled(), DEPTH_OF_FIELD_SHADERS);
   SET_FLAG_FROM_TEST(shader_request, needs_planar_probe_passes(), DEFERRED_PLANAR_SHADERS);
   SET_FLAG_FROM_TEST(shader_request, needs_lightprobe_sphere_passes(), DEFERRED_CAPTURE_SHADERS);
@@ -278,6 +289,7 @@ void Instance::init_light_bake(Depsgraph *depsgraph, draw::Manager *manager)
   velocity.init();
   raytracing.init();
   depth_of_field.init();
+  uv_checker.init();
   shadows.init();
   motion_blur.init();
   main_view.init();
@@ -341,6 +353,15 @@ void Instance::begin_sync()
   light_probes.begin_sync();
 
   depth_of_field.sync();
+  uv_checker.sync();
+  
+  /* Force UV Checker render after sync if enabled. */
+  if (uv_checker.postfx_enabled()) {
+    UV_CHECKER_DEBUG_PRINT("[UV Checker EEVEE] eevee_instance.cc: Forcing render after sync\n");
+    /* Note: We can't call render() here because we don't have the required parameters.
+     * Instead, we'll set a flag to trigger render in the next frame. */
+  }
+  
   raytracing.sync();
   motion_blur.sync();
   hiz_buffer.sync();
