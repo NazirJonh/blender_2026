@@ -20,6 +20,8 @@
 #include "BLI_rand.hh"
 #include "BLI_utildefines.h"
 
+#include "BLT_translation.hh"
+
 #include "DNA_brush_types.h"
 #include "DNA_curve_types.h"
 #include "DNA_object_types.h"
@@ -44,6 +46,9 @@
 
 #include "ED_screen.hh"
 #include "ED_view3d.hh"
+
+#include "UI_interface_layout.hh"
+#include "UI_resources.hh"
 
 #include "IMB_imbuf_types.hh"
 
@@ -129,6 +134,19 @@ struct PaintStroke {
   /* line constraint */
   bool constrain_line;
   float2 constrained_pos;
+
+  /* anchored brush repositioning */
+  bool anchored_repositioning;
+  float2 anchored_saved_offset;        // offset между anchor и мышью
+  float anchored_saved_rotation;
+  float anchored_saved_size;
+  float2 anchored_mouse_at_press;      // НОВОЕ: позиция мыши при нажатии Space
+  float2 anchored_visual_offset;       // НОВОЕ: визуальный offset для плавного следования
+  bool anchored_just_released;         // НОВОЕ: флаг для компенсации размера
+  float anchored_fixed_size;           // НОВОЕ: фиксированный размер после выхода из repositioning
+  float2 anchored_compensated_mouse;   // НОВОЕ: компенсированная позиция мыши
+  bool anchored_use_compensated_mouse; // НОВОЕ: флаг использования компенсированной позиции
+  float2 anchored_original_anchor;     // Позиция anchor до нажатия Space
 
   StrokeGetLocation get_location;
   StrokeTestStart test_start;
@@ -321,6 +339,11 @@ bool paint_brush_update(bContext *C,
   Scene *scene = CTX_data_scene(C);
   Paint *paint = BKE_paint_get_active_from_paintmode(scene, mode);
   bke::PaintRuntime &paint_runtime = *paint->runtime;
+  
+  // DEBUG: Отслеживание anchored_size в начале функции
+  printf("DEBUG: paint_brush_update START - anchored_size=%.3f, anchored_just_released=%d\n", 
+         (float)paint_runtime.anchored_size, stroke->anchored_just_released);
+  
   bool location_sampled = false;
   bool location_success = false;
   /* Use to perform all operations except applying the stroke,
@@ -408,49 +431,160 @@ bool paint_brush_update(bContext *C,
     bool hit = false;
     float2 halfway;
 
-    const float dx = mouse[0] - stroke->initial_mouse[0];
-    const float dy = mouse[1] - stroke->initial_mouse[1];
+    // Repositioning mode: follow BRUSH_DRAG_DOT pattern for simplicity
+    if (stroke->anchored_repositioning) {
 
-    paint_runtime.anchored_size = paint_runtime.pixel_radius = sqrtf(dx * dx + dy * dy);
+      // НОВОЕ: Вычислить движение мыши с момента нажатия Space
+      float2 mouse_delta = float2(mouse) - stroke->anchored_mouse_at_press;
+      float movement_distance = len_v2(mouse_delta);
+      
+      const float MOVEMENT_THRESHOLD = 15.0f; // пикселей - порог для начала следования
+      
+      
+      if (movement_distance < MOVEMENT_THRESHOLD) {
+        // Порог не превышен - stroke не двигается, сохраняет исходное положение
+        // Используем сохраненный offset для поддержания визуальной стабильности
+        float2 new_anchor = mouse + stroke->anchored_visual_offset;
+        copy_v2_v2(stroke->initial_mouse, new_anchor);
+        copy_v2_v2(paint_runtime.anchored_initial_mouse, new_anchor);
+      } else {
+        // Порог превышен - stroke следует за мышью
+        // Применяем сохраненный offset для плавного следования
+        float2 new_anchor = mouse + stroke->anchored_visual_offset;
+        copy_v2_v2(stroke->initial_mouse, new_anchor);
+        copy_v2_v2(paint_runtime.anchored_initial_mouse, new_anchor);
+        
+        // Обновляем visual_offset для более плавного следования
+        stroke->anchored_visual_offset = new_anchor - float2(mouse);
+      }
 
-    paint_runtime.brush_rotation = paint_runtime.brush_rotation_sec = atan2f(dy, dx) +
-                                                                      float(0.5f * M_PI);
+      // Зафиксировать размер и rotation
+      paint_runtime.anchored_size = stroke->anchored_saved_size;
+      paint_runtime.pixel_radius = stroke->anchored_saved_size;
+      paint_runtime.brush_rotation = stroke->anchored_saved_rotation;
+      paint_runtime.brush_rotation_sec = stroke->anchored_saved_rotation;
 
-    if (brush.flag & BRUSH_EDGE_TO_EDGE) {
-      halfway[0] = dx * 0.5f + stroke->initial_mouse[0];
-      halfway[1] = dy * 0.5f + stroke->initial_mouse[1];
+      // Update anchor point to current mouse position directly (like DRAG_DOT)
+      copy_v2_v2(paint_runtime.tex_mouse, stroke->initial_mouse);
+      copy_v2_v2(paint_runtime.mask_tex_mouse, stroke->initial_mouse);
 
+      stroke->stroke_distance = paint_runtime.pixel_radius;
+      paint_runtime.pixel_radius /= stroke->zoom_2d;
+      paint_runtime.draw_anchored = true;
+
+
+      // Calculate 3D location at the updated anchor position
       if (stroke->get_location) {
-        if (stroke->get_location(C, r_location, halfway, stroke->original)) {
-          hit = true;
+        if (stroke->get_location(C, r_location, mouse, stroke->original)) {
           location_sampled = true;
           location_success = true;
           *r_location_is_set = true;
         }
-        else if (!image_paint_brush_type_require_location(brush, mode)) {
-          hit = true;
+        else {
+          // Fallback will be handled later in the calling code
+          if (!image_paint_brush_type_require_location(brush, mode)) {
+            location_success = true;
+          }
         }
       }
       else {
-        hit = true;
+        // No get_location callback, treat as success
+        location_success = true;
       }
     }
-    if (hit) {
-      copy_v2_v2(paint_runtime.anchored_initial_mouse, halfway);
-      copy_v2_v2(paint_runtime.tex_mouse, halfway);
-      copy_v2_v2(paint_runtime.mask_tex_mouse, halfway);
-      copy_v2_v2(mouse, halfway);
-      paint_runtime.anchored_size /= 2.0f;
-      paint_runtime.pixel_radius /= 2.0f;
-      stroke->stroke_distance = paint_runtime.pixel_radius;
-    }
     else {
-      copy_v2_v2(paint_runtime.anchored_initial_mouse, stroke->initial_mouse);
-      copy_v2_v2(mouse, stroke->initial_mouse);
-      stroke->stroke_distance = paint_runtime.pixel_radius;
+      // НОВОЕ: Проверка флага компенсации размера
+      if (stroke->anchored_just_released) {
+        // Использовать базовый размер как минимум, но позволить увеличивать
+        float2 mouse_delta = float2(mouse) - stroke->initial_mouse;
+        float current_distance = len_v2(mouse_delta);
+        float base_distance = stroke->anchored_fixed_size / stroke->zoom_2d;
+        
+        // Использовать максимум из базового размера и текущего расстояния
+        float final_distance = fmaxf(base_distance, current_distance);
+        paint_runtime.pixel_radius = final_distance * stroke->zoom_2d;
+        paint_runtime.anchored_size = paint_runtime.pixel_radius;
+        
+        // DEBUG: Отладочная информация
+        printf("DEBUG: anchored_just_released - base_distance=%.3f, current_distance=%.3f, final_distance=%.3f, pixel_radius=%.3f\n", 
+               base_distance, current_distance, final_distance, paint_runtime.pixel_radius);
+        
+        // Если пользователь значительно увеличил размер, отключить компенсацию
+        const float SIZE_INCREASE_THRESHOLD = 30.0f; // пикселей
+        if (current_distance > base_distance + SIZE_INCREASE_THRESHOLD) {
+          // Пользователь активно увеличивает размер - отключить компенсацию
+          stroke->anchored_just_released = false;
+          stroke->anchored_original_anchor = float2(0.0f, 0.0f);
+          // Сбросить anchored_size чтобы позволить обычное изменение размера
+          paint_runtime.anchored_size = 0.0f;
+          printf("DEBUG: Size increase detected, disabling compensation\n");
+        }
+      } else {
+        // Обычный расчет размера
+        const float dx = mouse[0] - stroke->initial_mouse[0];
+        const float dy = mouse[1] - stroke->initial_mouse[1];
+
+        paint_runtime.pixel_radius = sqrtf(dx * dx + dy * dy);
+        // НЕ перезаписываем anchored_size в обычном режиме - он должен сохраняться
+      }
+
+      // Расчет rotation всегда выполняется независимо от компенсации размера
+      const float dx = mouse[0] - stroke->initial_mouse[0];
+      const float dy = mouse[1] - stroke->initial_mouse[1];
+
+      paint_runtime.brush_rotation = paint_runtime.brush_rotation_sec = atan2f(dy, dx) +
+                                                                        float(0.5f * M_PI);
+
+      if (brush.flag & BRUSH_EDGE_TO_EDGE) {
+        halfway[0] = dx * 0.5f + stroke->initial_mouse[0];
+        halfway[1] = dy * 0.5f + stroke->initial_mouse[1];
+
+        if (stroke->get_location) {
+          if (stroke->get_location(C, r_location, halfway, stroke->original)) {
+            hit = true;
+            location_sampled = true;
+            location_success = true;
+            *r_location_is_set = true;
+          }
+          else if (!image_paint_brush_type_require_location(brush, mode)) {
+            hit = true;
+          }
+        }
+        else {
+          hit = true;
+        }
+      }
+      if (hit) {
+        copy_v2_v2(paint_runtime.anchored_initial_mouse, halfway);
+        copy_v2_v2(paint_runtime.tex_mouse, halfway);
+        copy_v2_v2(paint_runtime.mask_tex_mouse, halfway);
+        copy_v2_v2(mouse, halfway);
+        paint_runtime.anchored_size /= 2.0f;
+        paint_runtime.pixel_radius /= 2.0f;
+        stroke->stroke_distance = paint_runtime.pixel_radius;
+      }
+      else {
+        copy_v2_v2(paint_runtime.anchored_initial_mouse, stroke->initial_mouse);
+        copy_v2_v2(mouse, stroke->initial_mouse);
+        stroke->stroke_distance = paint_runtime.pixel_radius;
+      }
     }
     paint_runtime.pixel_radius /= stroke->zoom_2d;
     paint_runtime.draw_anchored = true;
+  }
+  else if (brush.flag & BRUSH_DRAG_DOT) {
+    // BRUSH_DRAG_DOT: позволяет точно позиционировать одну точку
+    // Обычный режим DRAG_DOT - фиксированный размер, только позиция
+    paint_runtime.pixel_radius = BKE_brush_radius_get(paint, &brush) * paint_runtime.size_pressure_value;
+    
+    // Сохраняем текущую позицию мыши как anchor point
+    copy_v2_v2(stroke->initial_mouse, mouse);
+    copy_v2_v2(paint_runtime.anchored_initial_mouse, mouse);
+    copy_v2_v2(paint_runtime.tex_mouse, mouse);
+    copy_v2_v2(paint_runtime.mask_tex_mouse, mouse);
+    
+    paint_runtime.draw_anchored = true;
+    stroke->stroke_distance = paint_runtime.pixel_radius;
   }
   else {
     /* curve strokes do their own rake calculation */
@@ -502,6 +636,10 @@ bool paint_brush_update(bContext *C,
       /* don't set 'r_location_is_set', since we don't want to use the value. */
     }
   }
+
+  // DEBUG: Отслеживание anchored_size в конце функции
+  printf("DEBUG: paint_brush_update END - anchored_size=%.3f, anchored_just_released=%d\n", 
+         (float)paint_runtime.anchored_size, stroke->anchored_just_released);
 
   return location_success && !is_dry_run;
 }
@@ -565,6 +703,7 @@ static void paint_brush_stroke_add_step(
   const PaintMode mode = BKE_paintmode_get_active_from_context(C);
   const Brush &brush = *BKE_paint_brush_for_read(&paint);
   bke::PaintRuntime *paint_runtime = stroke->paint->runtime;
+  
 
 /* the following code is adapted from texture paint. It may not be needed but leaving here
  * just in case for reference (code in texpaint removed as part of refactoring).
@@ -620,12 +759,26 @@ static void paint_brush_stroke_add_step(
   bool is_location_is_set;
   paint_runtime->last_hit = paint_brush_update(
       C, brush, mode, stroke, mval, mouse_out, pressure, location, &is_location_is_set);
+  
+  
   if (is_location_is_set) {
     copy_v3_v3(paint_runtime->last_location, location);
   }
   if (!paint_runtime->last_hit) {
-    return;
+    if (stroke->anchored_repositioning) {
+      // В режиме перемещения используем последнюю валидную позицию
+      if (is_location_is_set) {
+        copy_v3_v3(location, paint_runtime->last_location);
+      }
+      else {
+        return;
+      }
+    }
+    else {
+      return;
+    }
   }
+  
 
   /* Dash */
   bool add_step = true;
@@ -651,6 +804,7 @@ static void paint_brush_stroke_add_step(
     RNA_float_set(&itemptr, "x_tilt", stroke->tilt.x);
     RNA_float_set(&itemptr, "y_tilt", stroke->tilt.y);
 
+    
     stroke->update_step(C, op, stroke, &itemptr);
 
     /* don't record this for now, it takes up a lot of memory when doing long
@@ -999,6 +1153,22 @@ PaintStroke *paint_stroke_new(bContext *C,
 
   paint_runtime->start_pixel_radius = BKE_brush_radius_get(stroke->paint, br);
 
+  /* Reset anchored size for new stroke */
+  paint_runtime->anchored_size = 0.0f;
+
+  /* Initialize anchored repositioning fields */
+  stroke->anchored_repositioning = false;
+  stroke->anchored_saved_size = 0.0f;
+  stroke->anchored_saved_rotation = 0.0f;
+  stroke->anchored_saved_offset = float2(0.0f, 0.0f);
+  stroke->anchored_mouse_at_press = float2(0.0f, 0.0f);
+  stroke->anchored_visual_offset = float2(0.0f, 0.0f);
+  stroke->anchored_just_released = false;
+  stroke->anchored_fixed_size = 0.0f;
+  stroke->anchored_compensated_mouse = float2(0.0f, 0.0f);
+  stroke->anchored_use_compensated_mouse = false;
+  stroke->anchored_original_anchor = float2(0.0f, 0.0f);
+
   return stroke;
 }
 
@@ -1018,6 +1188,11 @@ void paint_stroke_free(bContext *C, wmOperator * /*op*/, PaintStroke *stroke)
   paint_runtime->draw_anchored = false;
   paint_runtime->stroke_active = false;
 
+  // Восстановить курсор если был активен режим перемещения
+  if (stroke->anchored_repositioning) {
+    WM_cursor_set(CTX_wm_window(C), WM_CURSOR_DEFAULT);
+  }
+
   if (stroke->timer) {
     WM_event_timer_remove(CTX_wm_manager(C), CTX_wm_window(C), stroke->timer);
   }
@@ -1034,6 +1209,13 @@ static void stroke_done(bContext *C, wmOperator *op, PaintStroke *stroke)
   if (print_pressure_status_enabled()) {
     ED_workspace_status_text(C, nullptr);
   }
+  
+  // Очистить статусное сообщение для BRUSH_ANCHORED и BRUSH_DRAG_DOT
+  if (stroke->brush && (stroke->brush->flag & (BRUSH_ANCHORED | BRUSH_DRAG_DOT))) {
+    WorkspaceStatus status(C);
+    status.item("", ICON_NONE);  // Пустое сообщение для очистки
+  }
+  
   bke::PaintRuntime *paint_runtime = stroke->paint->runtime;
 
   /* reset rotation here to avoid doing so in cursor display */
@@ -1496,6 +1678,7 @@ wmOperatorStatus paint_stroke_modal(bContext *C,
   bool first_modal = false;
   bool redraw = false;
 
+
   if (event->type == INBETWEEN_MOUSEMOVE &&
       !image_paint_brush_type_require_inbetween_mouse_events(*br, mode))
   {
@@ -1590,6 +1773,12 @@ wmOperatorStatus paint_stroke_modal(bContext *C,
             SPACE_TYPE_ANY, RGN_TYPE_ANY, paint_brush_cursor_poll, paint_draw_line_cursor, stroke);
       }
 
+      // Добавить подсказку о горячей клавише Space для BRUSH_ANCHORED и BRUSH_DRAG_DOT
+      if (br->flag & (BRUSH_ANCHORED | BRUSH_DRAG_DOT)) {
+        WorkspaceStatus status(C);
+        status.item(IFACE_("Hold Space to reposition brush"), ICON_EVENT_SPACEKEY);
+      }
+
       first_dab = true;
     }
   }
@@ -1626,6 +1815,7 @@ wmOperatorStatus paint_stroke_modal(bContext *C,
     }
   }
 
+
   float2 mouse;
   if (event->type == stroke->event_type && !first_modal) {
     if (event->val == KM_RELEASE) {
@@ -1637,11 +1827,87 @@ wmOperatorStatus paint_stroke_modal(bContext *C,
       return OPERATOR_FINISHED;
     }
   }
-  else if (ELEM(event->type, EVT_RETKEY, EVT_SPACEKEY)) {
+  else if (event->type == EVT_RETKEY) {
     paint_stroke_line_end(C, op, stroke, sample_average.mouse);
     stroke_done(C, op, stroke);
     *stroke_p = nullptr;
     return OPERATOR_FINISHED;
+  }
+  else if (event->type == EVT_SPACEKEY) {
+    // Обработка Space только для BRUSH_ANCHORED - должна быть ДО общей обработки Space
+    if ((br->flag & BRUSH_ANCHORED) && stroke->stroke_started) {
+      if (event->val == KM_PRESS) {
+        if (!stroke->anchored_repositioning) {
+          // Включить режим перемещения
+          stroke->anchored_repositioning = true;
+          
+          // Сохранить текущие параметры - используем pixel_radius как в DRAG_DOT
+          stroke->anchored_saved_size = paint_runtime.pixel_radius * stroke->zoom_2d;
+          stroke->anchored_saved_rotation = paint_runtime.brush_rotation;
+          stroke->anchored_saved_offset = sample_average.mouse - stroke->initial_mouse;
+          
+          // НОВОЕ: Сохранить позицию мыши при нажатии Space
+          copy_v2_v2(stroke->anchored_mouse_at_press, sample_average.mouse);
+          
+          // НОВОЕ: Вычислить визуальный offset для плавного следования
+          stroke->anchored_visual_offset = stroke->initial_mouse - sample_average.mouse;
+          
+          // НОВОЕ: Сбросить флаг компенсации
+          stroke->anchored_just_released = false;
+          
+          // Сохранить ОРИГИНАЛЬНУЮ позицию anchor до перемещения
+          copy_v2_v2(stroke->anchored_original_anchor, stroke->initial_mouse);
+          
+          
+          // Визуальная обратная связь (изменение курсора)
+          WM_cursor_set(CTX_wm_window(C), WM_CURSOR_NSEW_SCROLL);
+          
+          // Обновить статусное сообщение
+          WorkspaceStatus status(C);
+          status.item(IFACE_("Release Space to confirm new position"), ICON_EVENT_SPACEKEY);
+          
+          return OPERATOR_RUNNING_MODAL;
+        }
+      }
+      else if (event->val == KM_RELEASE) {
+        if (stroke->anchored_repositioning) {
+          // Выключить режим перемещения
+          stroke->anchored_repositioning = false;
+          
+          // НОВОЕ: Установить флаг компенсации размера
+          stroke->anchored_just_released = true;
+          // ИСПРАВЛЕНИЕ: Сохранить размер в пикселях (как он был до перемещения)
+          stroke->anchored_fixed_size = stroke->anchored_saved_size;
+          
+          // DEBUG: Отладочная информация
+          printf("DEBUG: Space released - saved_size=%.3f, fixed_size=%.3f\n", 
+                 stroke->anchored_saved_size, stroke->anchored_fixed_size);
+          
+          // ИСПРАВЛЕНИЕ: Обновить initial_mouse плавно, используя текущую позицию stroke
+          // Это предотвращает резкий скачок при переходе к обычному режиму
+          copy_v2_v2(stroke->initial_mouse, sample_average.mouse);
+          
+          // Также обновить anchored_initial_mouse для консистентности
+          copy_v2_v2(paint_runtime.anchored_initial_mouse, sample_average.mouse);
+          
+          // Восстановить курсор
+          WM_cursor_set(CTX_wm_window(C), WM_CURSOR_DEFAULT);
+          
+          // Восстановить исходное статусное сообщение
+          WorkspaceStatus status(C);
+          status.item(IFACE_("Hold Space to reposition brush"), ICON_EVENT_SPACEKEY);
+          
+          return OPERATOR_RUNNING_MODAL;
+        }
+      }
+    }
+    else {
+      // Обычная обработка Space - завершить stroke
+      paint_stroke_line_end(C, op, stroke, sample_average.mouse);
+      stroke_done(C, op, stroke);
+      *stroke_p = nullptr;
+      return OPERATOR_FINISHED;
+    }
   }
   else if (br->flag & BRUSH_LINE) {
     if (event->modifier & KM_ALT) {
@@ -1668,9 +1934,27 @@ wmOperatorStatus paint_stroke_modal(bContext *C,
            (!(br->flag & BRUSH_AIRBRUSH) && ISMOUSE_MOTION(event->type)) ||
            /* airbrush */
            ((br->flag & BRUSH_AIRBRUSH) && event->type == TIMER &&
-            event->customdata == stroke->timer))
+            event->customdata == stroke->timer) ||
+           /* anchored repositioning */
+           (stroke->anchored_repositioning && ISMOUSE_MOTION(event->type)))
   {
-    if (paint_smooth_stroke(stroke, &sample_average, mode, mouse, pressure)) {
+    if (stroke->anchored_repositioning && ISMOUSE_MOTION(event->type)) {
+      
+      /* During repositioning, bypass smooth stroke and apply on every mouse motion */
+      if (stroke->stroke_started) {
+        mouse = sample_average.mouse;
+        pressure = sample_average.pressure;
+        
+        const float2 mouse_delta = mouse - stroke->last_mouse_position;
+        stroke->stroke_distance += math::length(mouse_delta);
+        paint_brush_stroke_add_step(C, op, stroke, mouse, pressure);
+        redraw = true;
+      }
+      else {
+        // Stroke not started yet
+      }
+    }
+    else if (paint_smooth_stroke(stroke, &sample_average, mode, mouse, pressure)) {
       if (stroke->stroke_started) {
         if (paint_space_stroke_enabled(*br, mode)) {
           if (paint_space_stroke(C, op, stroke, mouse, pressure)) {
@@ -1684,6 +1968,11 @@ wmOperatorStatus paint_stroke_modal(bContext *C,
           redraw = true;
         }
       }
+      else {
+        // Stroke not started yet
+      }
+    }
+    else {
     }
   }
 

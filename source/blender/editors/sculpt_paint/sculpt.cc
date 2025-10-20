@@ -3223,8 +3223,12 @@ static void do_brush_action(const Depsgraph &depsgraph,
       depsgraph, ob, brush, memory);
   const IndexMask node_mask = cursor_sample_result.node_mask;
 
+  printf("DEBUG: do_brush_action - node_mask.size()=%d, brush_type=%d, brush_flags=0x%x\n", 
+         node_mask.size(), brush.sculpt_brush_type, brush.flag);
+
   /* Only act if some verts are inside the brush area. */
   if (node_mask.is_empty()) {
+    printf("DEBUG: do_brush_action - node_mask is empty, returning\n");
     return;
   }
 
@@ -3278,14 +3282,23 @@ static void do_brush_action(const Depsgraph &depsgraph,
   }
 
   /* Apply one type of brush action. */
+  printf("DEBUG: do_brush_action - entering switch, brush_type=%d, brush_flags=0x%x\n", 
+         brush.sculpt_brush_type, brush.flag);
+  
   switch (brush.sculpt_brush_type) {
     case SCULPT_BRUSH_TYPE_DRAW: {
-      if (brush_uses_vector_displacement(brush)) {
+      printf("DEBUG: do_brush_action - SCULPT_BRUSH_TYPE_DRAW case\n");
+      bool uses_vector_displacement = brush_uses_vector_displacement(brush);
+      printf("DEBUG: do_brush_action - brush_uses_vector_displacement=%d\n", uses_vector_displacement);
+      if (uses_vector_displacement) {
+        printf("DEBUG: do_brush_action - calling do_draw_vector_displacement_brush\n");
         brushes::do_draw_vector_displacement_brush(depsgraph, sd, ob, node_mask);
       }
       else {
+        printf("DEBUG: do_brush_action - calling do_draw_brush\n");
         brushes::do_draw_brush(depsgraph, sd, ob, node_mask);
       }
+      printf("DEBUG: do_brush_action - SCULPT_BRUSH_TYPE_DRAW completed\n");
       break;
     }
     case SCULPT_BRUSH_TYPE_SMOOTH:
@@ -3458,6 +3471,8 @@ static void do_brush_action(const Depsgraph &depsgraph,
   paint_runtime.average_stroke_counter++;
   /* Update last stroke position. */
   paint_runtime.last_stroke_valid = true;
+  
+  printf("DEBUG: do_brush_action - completed successfully\n");
 }
 
 }  // namespace blender::ed::sculpt_paint
@@ -3569,7 +3584,10 @@ static void do_tiled(const Depsgraph &depsgraph,
 
   /* First do the "un-tiled" position to initialize the stroke for this location. */
   cache->tile_pass = 0;
+  printf("DEBUG: do_tiled - calling action at location=(%.2f, %.2f, %.2f)\n",
+         cache->location_symm[0], cache->location_symm[1], cache->location_symm[2]);
   action(depsgraph, scene, sd, ob, brush, paint_mode_settings);
+  printf("DEBUG: do_tiled - action completed\n");
 
   /* Now do it for all the tiles. */
   copy_v3_v3_int(cur, start);
@@ -4244,7 +4262,10 @@ static void brush_delta_update(const Depsgraph &depsgraph,
 
     paint_runtime.draw_anchored = true;
     copy_v2_v2(paint_runtime.anchored_initial_mouse, cache->initial_mouse);
-    paint_runtime.anchored_size = paint_runtime.pixel_radius;
+    // НЕ перезаписываем anchored_size если он уже установлен (например, после компенсации размера)
+    if (paint_runtime.anchored_size <= 0.0f) {
+      paint_runtime.anchored_size = paint_runtime.pixel_radius;
+    }
   }
 
   /* Handle 'rake' */
@@ -4396,12 +4417,18 @@ static void sculpt_update_cache_variants(bContext *C, Sculpt &sd, Object &ob, Po
 
   if (BKE_brush_use_size_pressure(&brush) && paint_supports_dynamic_size(brush, PaintMode::Sculpt))
   {
-    cache.radius = brush_dynamic_size_get(brush, cache, cache.initial_radius);
+    // НЕ перезаписываем cache.radius если мы находимся в режиме компенсации размера
+    if (paint_runtime.anchored_size <= 0.0f) {
+      cache.radius = brush_dynamic_size_get(brush, cache, cache.initial_radius);
+    }
     cache.dyntopo_pixel_radius = brush_dynamic_size_get(
         brush, cache, paint_runtime.initial_pixel_radius);
   }
   else {
-    cache.radius = cache.initial_radius;
+    // НЕ перезаписываем cache.radius если мы находимся в режиме компенсации размера
+    if (paint_runtime.anchored_size <= 0.0f) {
+      cache.radius = cache.initial_radius;
+    }
     cache.dyntopo_pixel_radius = paint_runtime.initial_pixel_radius;
   }
 
@@ -4414,9 +4441,21 @@ static void sculpt_update_cache_variants(bContext *C, Sculpt &sd, Object &ob, Po
     if (brush.flag & BRUSH_EDGE_TO_EDGE) {
       RNA_float_get_array(ptr, "location", cache.location);
     }
+    else {
+      /* For repositioning mode, always update location from RNA */
+      RNA_float_get_array(ptr, "location", cache.location);
+    }
 
-    cache.radius = paint_calc_object_space_radius(
-        *cache.vc, cache.location, paint_runtime.pixel_radius);
+    // НЕ перезаписываем cache.radius если мы находимся в режиме компенсации размера
+    // anchored_size > 0 означает, что размер был установлен нашей логикой компенсации
+    if (paint_runtime.anchored_size <= 0.0f) {
+      cache.radius = paint_calc_object_space_radius(
+          *cache.vc, cache.location, paint_runtime.pixel_radius);
+    } else {
+      // Если anchored_size установлен, используем его для расчета radius
+      cache.radius = paint_calc_object_space_radius(
+          *cache.vc, cache.location, paint_runtime.anchored_size);
+    }
     cache.radius_squared = cache.radius * cache.radius;
   }
 
@@ -4427,7 +4466,10 @@ static void sculpt_update_cache_variants(bContext *C, Sculpt &sd, Object &ob, Po
 
     paint_runtime.draw_anchored = true;
     copy_v2_v2(paint_runtime.anchored_initial_mouse, cache.initial_mouse);
-    paint_runtime.anchored_size = paint_runtime.pixel_radius;
+    // НЕ перезаписываем anchored_size если он уже установлен (например, после компенсации размера)
+    if (paint_runtime.anchored_size <= 0.0f) {
+      paint_runtime.anchored_size = paint_runtime.pixel_radius;
+    }
   }
 
   cache.special_rotation = paint_runtime.brush_rotation;
@@ -5035,6 +5077,7 @@ static void restore_from_undo_step_if_necessary(const Depsgraph &depsgraph,
 
   /* Restore the mesh before continuing with anchored stroke. */
   if (brush->flag & BRUSH_ANCHORED || brush->flag & BRUSH_DRAG_DOT) {
+    printf("DEBUG: restore_from_undo_step_if_necessary - restoring mesh for ANCHORED/DRAG_DOT\n");
 
     undo::restore_from_undo_step(depsgraph, sd, ob);
 
@@ -5045,6 +5088,8 @@ static void restore_from_undo_step_if_necessary(const Depsgraph &depsgraph,
       ss.cache->layer_displacement_factor = {};
       ss.cache->paint_brush.mix_colors = {};
     }
+    
+    printf("DEBUG: restore_from_undo_step_if_necessary - mesh restoration completed\n");
   }
 }
 
@@ -5537,9 +5582,38 @@ static void stroke_update_step(bContext *C,
   ToolSettings &tool_settings = *CTX_data_tool_settings(C);
   StrokeCache *cache = ss.cache;
   cache->stroke_distance = paint_stroke_distance_get(stroke);
+  
+  // Проверяем режим перемещения через RNA параметры
+  float3 location;
+  RNA_float_get_array(itemptr, "location", location);
+  printf("DEBUG: stroke_update_step - location=(%.2f, %.2f, %.2f), brush_type=%d\n", 
+         location[0], location[1], location[2], brush.sculpt_brush_type);
 
   SCULPT_stroke_modifiers_check(C, ob, brush);
   sculpt_update_cache_variants(C, sd, ob, itemptr);
+  
+  // Исправить cache->scale для режима перемещения BRUSH_ANCHORED
+  // Проверяем через paint_runtime, который обновляется в paint_brush_update
+  bke::PaintRuntime &paint_runtime = *sd.paint.runtime;
+  printf("DEBUG: stroke_update_step - paint_runtime.anchored_size=%.3f, draw_anchored=%d\n", 
+         (float)paint_runtime.anchored_size, (int)paint_runtime.draw_anchored);
+  if ((brush.flag & BRUSH_ANCHORED) && paint_runtime.draw_anchored && paint_runtime.anchored_size > 0.0f) {
+    // Используем anchored_size из paint_runtime как базу для scale
+    // Нормализуем по радиусу кисти для корректного масштабирования
+    float normalized_scale = paint_runtime.anchored_size / (cache->radius * 100.0f);
+    if (normalized_scale < 0.01f) normalized_scale = 0.01f; // Минимальное значение для предотвращения нулевого scale
+    cache->scale[0] = cache->scale[1] = cache->scale[2] = normalized_scale;
+    printf("DEBUG: stroke_update_step - corrected cache->scale=%.3f for repositioning (anchored_size=%.3f, radius=%.3f)\n", 
+           cache->scale[0], (float)paint_runtime.anchored_size, cache->radius);
+  }
+  else if (brush.flag & BRUSH_ANCHORED) {
+    // Если anchored_size равен 0, используем минимальное значение scale
+    if (cache->scale[0] == 0.0f || cache->scale[1] == 0.0f || cache->scale[2] == 0.0f) {
+      cache->scale[0] = cache->scale[1] = cache->scale[2] = 0.01f;
+      printf("DEBUG: stroke_update_step - set minimum cache->scale=%.3f for ANCHORED brush\n", cache->scale[0]);
+    }
+  }
+  
   restore_from_undo_step_if_necessary(depsgraph, sd, ob);
 
   if (dyntopo::stroke_is_dyntopo(ob, brush)) {
@@ -5558,17 +5632,21 @@ static void stroke_update_step(bContext *C,
 
   /* Cleanup. */
   if (brush.sculpt_brush_type == SCULPT_BRUSH_TYPE_MASK) {
+    printf("DEBUG: stroke_update_step - flushing Mask update\n");
     flush_update_step(C, UpdateType::Mask);
   }
   else if (brush_type_is_paint(brush.sculpt_brush_type)) {
     if (SCULPT_use_image_paint_brush(tool_settings.paint_mode, ob)) {
+      printf("DEBUG: stroke_update_step - flushing Image update\n");
       flush_update_step(C, UpdateType::Image);
     }
     else {
+      printf("DEBUG: stroke_update_step - flushing Color update\n");
       flush_update_step(C, UpdateType::Color);
     }
   }
   else {
+    printf("DEBUG: stroke_update_step - flushing Position update\n");
     flush_update_step(C, UpdateType::Position);
   }
 }

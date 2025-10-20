@@ -180,15 +180,29 @@ void do_draw_brush(const Depsgraph &depsgraph,
                    Object &object,
                    const IndexMask &node_mask)
 {
+  printf("DEBUG: do_draw_brush - ENTRY POINT REACHED!\n");
+  
   const SculptSession &ss = *object.sculpt;
   const Brush &brush = *BKE_paint_brush_for_read(&sd.paint);
+
+  printf("DEBUG: do_draw_brush - node_mask.size()=%d, brush_flags=0x%x\n", 
+         node_mask.size(), brush.flag);
 
   const float3 effective_normal = tilt_effective_normal_get(ss, brush);
 
   const float3 offset = effective_normal * ss.cache->radius * ss.cache->scale *
                         ss.cache->bstrength;
 
+  printf("DEBUG: do_draw_brush - offset=(%.3f, %.3f, %.3f), radius=%.3f, scale=%.3f, bstrength=%.3f\n",
+         offset[0], offset[1], offset[2], ss.cache->radius, ss.cache->scale, ss.cache->bstrength);
+  printf("DEBUG: do_draw_brush - effective_normal=(%.3f, %.3f, %.3f)\n", 
+         effective_normal[0], effective_normal[1], effective_normal[2]);
+  printf("DEBUG: do_draw_brush - ss.cache->scale=%.3f, ss.cache->radius=%.3f, ss.cache->bstrength=%.3f\n",
+         ss.cache->scale, ss.cache->radius, ss.cache->bstrength);
+
   offset_positions(depsgraph, sd, object, offset, node_mask);
+  
+  printf("DEBUG: do_draw_brush - completed\n");
 }
 
 void do_nudge_brush(const Depsgraph &depsgraph,
