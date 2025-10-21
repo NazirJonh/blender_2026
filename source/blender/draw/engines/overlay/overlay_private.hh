@@ -473,6 +473,8 @@ class ShaderModule {
   StaticShader light_spot_cone = shader_clippable("overlay_extra_spot_cone");
   StaticShader mesh_analysis = shader_clippable("overlay_edit_mesh_analysis");
   StaticShader mesh_edit_depth = shader_clippable("overlay_edit_mesh_depth");
+  StaticShader mesh_edit_face_sets = shader_clippable("overlay_edit_mesh_face_sets");
+  StaticShader mesh_edit_face_sets_fake_shading = shader_clippable("overlay_edit_mesh_face_sets_fake_shading");
   StaticShader mesh_edit_edge = shader_clippable("overlay_edit_mesh_edge");
   StaticShader mesh_edit_face = shader_clippable("overlay_edit_mesh_face");
   StaticShader mesh_edit_facedot = shader_clippable("overlay_edit_mesh_facedot");
@@ -580,7 +582,7 @@ struct GreasePencilDepthPlane {
    * Will be computed just before drawing. */
   float4 plane;
   /* Center and size of the bounding box of the Grease Pencil object. */
-  Bounds<float3> bounds;
+  blender::Bounds<float3> bounds;
   /* Grease-pencil object resource handle. */
   ResourceHandleRange handle;
 };
@@ -731,6 +733,8 @@ struct Resources : public select::SelectMap {
     shaders->light_spot_cone.ensure_compile_async();
     shaders->mesh_analysis.ensure_compile_async();
     shaders->mesh_edit_depth.ensure_compile_async();
+    shaders->mesh_edit_face_sets.ensure_compile_async();
+    shaders->mesh_edit_face_sets_fake_shading.ensure_compile_async();
     shaders->mesh_edit_edge.ensure_compile_async();
     shaders->mesh_edit_face.ensure_compile_async();
     shaders->mesh_edit_facedot.ensure_compile_async();

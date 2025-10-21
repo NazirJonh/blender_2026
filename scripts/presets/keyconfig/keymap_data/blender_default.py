@@ -5455,6 +5455,11 @@ def km_edit_mesh(params):
         op_menu("VIEW3D_MT_edit_mesh_select_similar", {"type": 'G', "value": 'PRESS', "shift": True}),
         # Hide/reveal.
         *_template_items_hide_reveal_actions("mesh.hide", "mesh.reveal"),
+        # Face Set visibility operations.
+        ("mesh.face_set_hide_active", {"type": 'H', "value": 'PRESS', "shift": True, "ctrl": True}, None),
+        ("mesh.face_set_hide_inactive", {"type": 'H', "value": 'PRESS', "shift": True, "alt": True}, None),
+        ("mesh.face_set_show_all", {"type": 'H', "value": 'PRESS', "alt": True, "ctrl": True}, None),
+        ("mesh.face_set_isolate", {"type": 'I', "value": 'PRESS', "shift": True}, None),
         # Tools.
         ("mesh.normals_make_consistent", {"type": 'N', "value": 'PRESS', "ctrl" if params.legacy else "shift": True},
          {"properties": [("inside", False)]}),

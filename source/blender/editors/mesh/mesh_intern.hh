@@ -264,6 +264,12 @@ void MESH_OT_split(wmOperatorType *ot);
 void MESH_OT_edge_rotate(wmOperatorType *ot);
 void MESH_OT_hide(wmOperatorType *ot);
 void MESH_OT_reveal(wmOperatorType *ot);
+
+/* Face Set visibility operators */
+void MESH_OT_face_set_hide_active(wmOperatorType *ot);
+void MESH_OT_face_set_hide_inactive(wmOperatorType *ot);
+void MESH_OT_face_set_show_all(wmOperatorType *ot);
+void MESH_OT_face_set_isolate(wmOperatorType *ot);
 void MESH_OT_mark_seam(wmOperatorType *ot);
 void MESH_OT_mark_sharp(wmOperatorType *ot);
 void MESH_OT_flip_normals(wmOperatorType *ot);

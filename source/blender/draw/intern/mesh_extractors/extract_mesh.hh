@@ -222,6 +222,8 @@ struct EditLoopData {
    * bits, while the vertex crease is stored in the upper 4 bits. */
   uchar crease;
   uchar bweight;
+  uchar4 face_set_color;  /* RGB color from face set + unused alpha */
+  float3 nor;  /* Normal for shading */
 };
 
 void mesh_render_data_face_flag(const MeshRenderData &mr,
