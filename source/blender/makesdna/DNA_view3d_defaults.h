@@ -8,6 +8,17 @@
 
 #pragma once
 
+/* DEBUG: Symmetry plane defaults debugging */
+#ifdef __cplusplus
+#include <iostream>
+#define DEBUG_DNA_DEFAULTS 1
+#if DEBUG_DNA_DEFAULTS
+#define DEBUG_PRINT_DNA(msg) std::cout << "[DNA_DEFAULTS_DEBUG] " << msg << std::endl
+#else
+#define DEBUG_PRINT_DNA(msg)
+#endif
+#endif
+
 /* clang-format off */
 
 /* -------------------------------------------------------------------- */
@@ -54,6 +65,10 @@
      * we typically want to see shading too. */ \
     .sculpt_mode_mask_opacity = 0.75f, \
     .sculpt_mode_face_sets_opacity = 1.0f, \
+    .show_sculpt_symmetry_plane = true, \
+    .show_sculpt_symmetry_contour = true, \
+    .sculpt_symmetry_plane_opacity = 0.5f, \
+    .sculpt_symmetry_contour_thickness = 10.0f, \
  \
     .edit_flag = V3D_OVERLAY_EDIT_FACES | V3D_OVERLAY_EDIT_SEAMS | \
                              V3D_OVERLAY_EDIT_SHARP | V3D_OVERLAY_EDIT_FREESTYLE_EDGE | \

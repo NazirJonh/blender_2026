@@ -6,6 +6,8 @@
 
 FRAGMENT_SHADER_CREATE_INFO(overlay_antialiasing)
 
+#define LINE_WIDTH_PACK_SCALE 255.0f
+
 /**
  * Returns coverage of a line onto a sample that is distance_to_line (in pixels) far from the line.
  * line_kernel_size is the inner size of the line with 100% coverage.
@@ -80,7 +82,6 @@ void neighbor_blend(float line_coverage,
 void main()
 {
   int2 center_texel = int2(gl_FragCoord.xy);
-  float line_kernel = theme.sizes.pixel * 0.5f - 0.5f;
 
   frag_color = texelFetch(color_tx, center_texel, 0);
 
@@ -88,10 +89,16 @@ void main()
 
   float depth = texelFetch(depth_tx, center_texel, 0).r;
 
-  float dist_raw = texelFetch(line_tx, center_texel, 0).b;
+  float4 line_data = texelFetch(line_tx, center_texel, 0);
+  float encoded_width = line_data.a;
+  float width = (encoded_width >= 0.999f) ? 1.0f :
+                                           max(encoded_width * LINE_WIDTH_PACK_SCALE, 1.0f);
+  float line_kernel = theme.sizes.pixel * 0.5f * width - 0.5f;
+
+  float dist_raw = line_data.b;
   float dist = decode_line_dist(dist_raw);
 
-  if (!do_smooth_lines && dist <= 1.0f) {
+  if (!do_smooth_lines && dist <= 1.0f && width <= 1.001f) {
     /* No expansion or AA should be applied. */
     return;
   }
@@ -102,10 +109,10 @@ void main()
   float4 neightbor_col2 = texelFetchOffset(color_tx, center_texel, 0, int2(0, 1));
   float4 neightbor_col3 = texelFetchOffset(color_tx, center_texel, 0, int2(0, -1));
 
-  float3 neightbor_line0 = texelFetchOffset(line_tx, center_texel, 0, int2(1, 0)).rgb;
-  float3 neightbor_line1 = texelFetchOffset(line_tx, center_texel, 0, int2(-1, 0)).rgb;
-  float3 neightbor_line2 = texelFetchOffset(line_tx, center_texel, 0, int2(0, 1)).rgb;
-  float3 neightbor_line3 = texelFetchOffset(line_tx, center_texel, 0, int2(0, -1)).rgb;
+  float4 neightbor_line0 = texelFetchOffset(line_tx, center_texel, 0, int2(1, 0));
+  float4 neightbor_line1 = texelFetchOffset(line_tx, center_texel, 0, int2(-1, 0));
+  float4 neightbor_line2 = texelFetchOffset(line_tx, center_texel, 0, int2(0, 1));
+  float4 neightbor_line3 = texelFetchOffset(line_tx, center_texel, 0, int2(0, -1));
 
   float4 depths;
   depths.x = texelFetchOffset(depth_tx, center_texel, 0, int2(1, 0)).r;
@@ -114,12 +121,30 @@ void main()
   depths.w = texelFetchOffset(depth_tx, center_texel, 0, int2(0, -1)).r;
 
   float4 line_dists;
-  line_dists.x = neighbor_dist(neightbor_line0, float2(1, 0));
-  line_dists.y = neighbor_dist(neightbor_line1, float2(-1, 0));
-  line_dists.z = neighbor_dist(neightbor_line2, float2(0, 1));
-  line_dists.w = neighbor_dist(neightbor_line3, float2(0, -1));
+  line_dists.x = neighbor_dist(neightbor_line0.xyz, float2(1, 0));
+  line_dists.y = neighbor_dist(neightbor_line1.xyz, float2(-1, 0));
+  line_dists.z = neighbor_dist(neightbor_line2.xyz, float2(0, 1));
+  line_dists.w = neighbor_dist(neightbor_line3.xyz, float2(0, -1));
 
-  float4 coverage = line_coverage(line_dists, line_kernel);
+  float4 neighbor_widths;
+  neighbor_widths.x = (neightbor_line0.a >= 0.999f) ?
+                          1.0f :
+                          max(neightbor_line0.a * LINE_WIDTH_PACK_SCALE, 1.0f);
+  neighbor_widths.y = (neightbor_line1.a >= 0.999f) ?
+                          1.0f :
+                          max(neightbor_line1.a * LINE_WIDTH_PACK_SCALE, 1.0f);
+  neighbor_widths.z = (neightbor_line2.a >= 0.999f) ?
+                          1.0f :
+                          max(neightbor_line2.a * LINE_WIDTH_PACK_SCALE, 1.0f);
+  neighbor_widths.w = (neightbor_line3.a >= 0.999f) ?
+                          1.0f :
+                          max(neightbor_line3.a * LINE_WIDTH_PACK_SCALE, 1.0f);
+
+  float4 coverage;
+  coverage.x = line_coverage(line_dists.x, theme.sizes.pixel * 0.5f * neighbor_widths.x - 0.5f);
+  coverage.y = line_coverage(line_dists.y, theme.sizes.pixel * 0.5f * neighbor_widths.y - 0.5f);
+  coverage.z = line_coverage(line_dists.z, theme.sizes.pixel * 0.5f * neighbor_widths.z - 0.5f);
+  coverage.w = line_coverage(line_dists.w, theme.sizes.pixel * 0.5f * neighbor_widths.w - 0.5f);
 
   if (dist_raw > 0.0f) {
     frag_color *= line_coverage(dist, line_kernel);

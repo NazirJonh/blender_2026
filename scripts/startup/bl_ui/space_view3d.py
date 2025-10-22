@@ -7504,6 +7504,20 @@ class VIEW3D_PT_overlay_sculpt(Panel):
         sub.active = overlay.show_sculpt_face_sets
         row.prop(overlay, "sculpt_mode_face_sets_opacity", text="Face Sets")
 
+        # Symmetry plane overlay
+        row = layout.row(align=True)
+        row.prop(overlay, "show_sculpt_symmetry_plane", text="")
+        sub = row.row()
+        sub.active = overlay.show_sculpt_symmetry_plane
+        sub.prop(overlay, "sculpt_symmetry_plane_opacity", text="Symmetry Plane")
+        
+        # Symmetry contour overlay
+        row = layout.row(align=True)
+        row.prop(overlay, "show_sculpt_symmetry_contour", text="")
+        sub = row.row()
+        sub.active = overlay.show_sculpt_symmetry_contour
+        sub.prop(overlay, "sculpt_symmetry_contour_thickness", text="Contours")
+
 
 class VIEW3D_PT_overlay_sculpt_curves(Panel):
     bl_space_type = 'VIEW_3D'

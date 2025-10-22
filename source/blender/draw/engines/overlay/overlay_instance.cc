@@ -6,11 +6,21 @@
  * \ingroup overlay
  */
 
+#include <iostream>
+#include <cstdio>
+
+#define OVERLAY_INSTANCE_DEBUG(msg, ...) \
+  do { \
+    printf("[OVERLAY_INSTANCE_DEBUG] " msg "\n", ##__VA_ARGS__); \
+    fflush(stdout); \
+  } while (0)
+
 #include "BKE_colorband.hh"
 #include "DEG_depsgraph_query.hh"
 
 #include "ED_view3d.hh"
 
+#include "BLI_math_color.h"
 #include "BKE_paint.hh"
 
 #include "draw_debug.hh"
@@ -86,13 +96,18 @@ void Instance::init()
     state.is_render_depth_available |= state.is_depth_only_drawing;
 
     if (!state.hide_overlays) {
+      OVERLAY_INSTANCE_DEBUG("Before copying overlay: v3d->overlay.show_sculpt_symmetry_plane = %d", 
+                           state.v3d->overlay.show_sculpt_symmetry_plane);
       state.overlay = state.v3d->overlay;
+      OVERLAY_INSTANCE_DEBUG("After copying overlay: state.overlay.show_sculpt_symmetry_plane = %d", 
+                           state.overlay.show_sculpt_symmetry_plane);
       state.v3d_flag = state.v3d->flag;
       state.v3d_gridflag = state.v3d->gridflag;
       state.show_text = !resources.is_selection() && !state.is_depth_only_drawing &&
                         (ctx->v3d->overlay.flag & V3D_OVERLAY_HIDE_TEXT) == 0;
     }
     else {
+      OVERLAY_INSTANCE_DEBUG("Overlays hidden, clearing state.overlay");
       memset(&state.overlay, 0, sizeof(state.overlay));
       state.v3d_flag = 0;
       state.v3d_gridflag = 0;
@@ -278,6 +293,7 @@ void Resources::update_theme_settings(const DRWContext *ctx, const State &state)
   UI_GetThemeColor4fv(TH_FACE_SELECT, gb.colors.face_select);
   UI_GetThemeColor4fv(TH_FACE_MODE_SELECT, gb.colors.face_mode_select);
   UI_GetThemeColor4fv(TH_FACE_RETOPOLOGY, gb.colors.face_retopology);
+  UI_GetThemeColor4fv(TH_SCULPT_SYMMETRY_CONTOUR, gb.colors.sculpt_symmetry_contour);
   UI_GetThemeColor4fv(TH_FACE_BACK, gb.colors.face_back);
   UI_GetThemeColor4fv(TH_FACE_FRONT, gb.colors.face_front);
   UI_GetThemeColor4fv(TH_NORMAL, gb.colors.normal);
@@ -376,11 +392,15 @@ void Resources::update_theme_settings(const DRWContext *ctx, const State &state)
   /* Color management. */
   {
     float4 *color = reinterpret_cast<float4 *>(&gb.colors);
-    float4 *color_end = color + (sizeof(gb.colors) / sizeof(float4));
-    do {
-      /* TODO: more accurate transform. */
-      srgb_to_linearrgb_v4(&color->x, &color->x);
-    } while (++color <= color_end);
+    const int color_len = int(sizeof(gb.colors) / sizeof(float4));
+    for (int i = 0; i < color_len; i++, color++) {
+      float3 rgb = color->xyz();
+      /* Преобразуем только RGB, alpha не трогаем. */
+      srgb_to_linearrgb_v3_v3(rgb, rgb);
+      color->x = rgb.x;
+      color->y = rgb.y;
+      color->z = rgb.z;
+    }
   }
 
   gb.sizes.pixel = 1.0f;
@@ -670,6 +690,7 @@ void Instance::end_sync()
     layer.relations.end_sync(resources, state);
     layer.fluids.end_sync(resources, state);
     layer.speakers.end_sync(resources, state);
+    layer.sculpts.end_sync(resources, state);
   };
   end_sync_layer(regular);
   end_sync_layer(infront);
@@ -862,8 +883,8 @@ void Instance::draw_v3d(Manager &manager, View &view)
     regular.cameras.draw_scene_background_images(resources.render_fb, manager, view);
     infront.cameras.draw_scene_background_images(resources.render_in_front_fb, manager, view);
 
-    regular.sculpts.draw_on_render(resources.render_fb, manager, view);
-    infront.sculpts.draw_on_render(resources.render_in_front_fb, manager, view);
+    regular.sculpts.draw_on_render(resources.render_fb, manager, view, state);
+    infront.sculpts.draw_on_render(resources.render_in_front_fb, manager, view, state);
   }
   {
     /* Overlay Line prepass. */

@@ -262,6 +262,13 @@ typedef struct View3DOverlay {
 
   /** Curves sculpt mode settings. */
   float sculpt_curves_cage_opacity;
+
+  /** Sculpt symmetry plane settings. */
+  char show_sculpt_symmetry_plane;
+  char show_sculpt_symmetry_contour;
+  char _pad[6];
+  float sculpt_symmetry_plane_opacity;
+  float sculpt_symmetry_contour_thickness;
 } View3DOverlay;
 
 /** #View3DOverlay.handle_display */

@@ -9,6 +9,15 @@
 #include <cstdlib>
 #include <cstring>
 
+/* DEBUG: Symmetry plane RNA debugging */
+#include <iostream>
+#define DEBUG_RNA_SYMMETRY 1
+#if DEBUG_RNA_SYMMETRY
+#define DEBUG_PRINT_RNA(msg) std::cout << "[RNA_DEBUG] " << msg << std::endl
+#else
+#define DEBUG_PRINT_RNA(msg)
+#endif
+
 #include "BLI_math_constants.h"
 #include "BLI_string_ref.hh"
 #include "BLT_translation.hh"
@@ -5213,6 +5222,40 @@ static void rna_def_space_view3d_overlay(BlenderRNA *brna)
   RNA_def_property_boolean_sdna(prop, nullptr, "overlay.flag", V3D_OVERLAY_SCULPT_SHOW_FACE_SETS);
   RNA_def_property_ui_text(prop, "Sculpt Show Face Sets", "");
   RNA_def_property_update(prop, NC_SPACE | ND_SPACE_VIEW3D, nullptr);
+
+  prop = RNA_def_property(srna, "show_sculpt_symmetry_plane", PROP_BOOLEAN, PROP_NONE);
+  RNA_def_property_boolean_sdna(prop, nullptr, "overlay.show_sculpt_symmetry_plane", 0);
+  RNA_def_property_ui_text(prop, "Show Sculpt Symmetry Plane", "Display symmetry plane in sculpt mode");
+  RNA_def_property_update(prop, NC_SPACE | ND_SPACE_VIEW3D, nullptr);
+  
+  // DEBUG: Log RNA property definition
+  DEBUG_PRINT_RNA("Defined show_sculpt_symmetry_plane RNA property");
+
+  prop = RNA_def_property(srna, "sculpt_symmetry_plane_opacity", PROP_FLOAT, PROP_FACTOR);
+  RNA_def_property_float_sdna(prop, nullptr, "overlay.sculpt_symmetry_plane_opacity");
+  RNA_def_property_ui_text(prop, "Sculpt Symmetry Plane Opacity", "Opacity of the symmetry plane in sculpt mode");
+  RNA_def_property_range(prop, 0.0f, 1.0f);
+  RNA_def_property_update(prop, NC_SPACE | ND_SPACE_VIEW3D, nullptr);
+  
+  // DEBUG: Log RNA property definition
+  DEBUG_PRINT_RNA("Defined sculpt_symmetry_plane_opacity RNA property");
+
+  prop = RNA_def_property(srna, "show_sculpt_symmetry_contour", PROP_BOOLEAN, PROP_NONE);
+  RNA_def_property_boolean_sdna(prop, nullptr, "overlay.show_sculpt_symmetry_contour", 0);
+  RNA_def_property_ui_text(prop, "Show Sculpt Symmetry Contours", "Display symmetry contour lines in sculpt mode");
+  RNA_def_property_update(prop, NC_SPACE | ND_SPACE_VIEW3D, nullptr);
+  
+  // DEBUG: Log RNA property definition
+  DEBUG_PRINT_RNA("Defined show_sculpt_symmetry_contour RNA property");
+
+  prop = RNA_def_property(srna, "sculpt_symmetry_contour_thickness", PROP_FLOAT, PROP_PIXEL);
+  RNA_def_property_float_sdna(prop, nullptr, "overlay.sculpt_symmetry_contour_thickness");
+  RNA_def_property_ui_text(prop, "Sculpt Symmetry Contour Thickness", "Thickness of symmetry contour lines in pixels");
+  RNA_def_property_range(prop, 1.0f, 50.0f);
+  RNA_def_property_update(prop, NC_SPACE | ND_SPACE_VIEW3D, nullptr);
+  
+  // DEBUG: Log RNA property definition
+  DEBUG_PRINT_RNA("Defined sculpt_symmetry_contour_thickness RNA property");
 
   /* grease pencil paper settings */
   prop = RNA_def_property(srna, "show_annotation", PROP_BOOLEAN, PROP_NONE);

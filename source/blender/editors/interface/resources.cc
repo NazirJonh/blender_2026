@@ -421,6 +421,9 @@ const uchar *UI_ThemeGetColorPtr(bTheme *btheme, int spacetype, int colorid)
         case TH_FACE_RETOPOLOGY:
           cp = ts->face_retopology;
           break;
+    case TH_SCULPT_SYMMETRY_CONTOUR:
+      cp = ts->sculpt_symmetry_contour;
+      break;
         case TH_FACE_BACK:
           cp = ts->face_back;
           break;
