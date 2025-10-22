@@ -7,6 +7,8 @@
  */
 
 #include <algorithm>
+#include <memory>
+#include <vector>
 
 #include "MEM_guardedalloc.h"
 
@@ -94,6 +96,9 @@ struct TexSnapshot {
   int old_size;
   float old_zoom;
   bool old_col;
+  /* Brush and texture IDs to detect when brush or texture changes */
+  int brush_id;
+  int texture_id;
 };
 
 struct CursorSnapshot {
@@ -103,34 +108,479 @@ struct CursorSnapshot {
   int curve_preset;
 };
 
+namespace blender::ed::sculpt_paint {
+
+/* Forward declaration */
+bool paint_draw_tex_overlay_3d(Paint *paint,
+                               Brush *brush,
+                               ViewContext *vc,
+                               float zoom,
+                               const PaintMode mode,
+                               bool col,
+                               bool primary,
+                               float radius,
+                               float brush_rotation,
+                               const float location[3],
+                               const float normal[3]);
+
+/* Global variables for texture snapshots */
 static TexSnapshot primary_snap = {nullptr};
 static TexSnapshot secondary_snap = {nullptr};
 static CursorSnapshot cursor_snap = {nullptr};
 
-void paint_cursor_delete_textures()
+/* TODO(REFACT-STAGE-2-001): Implement PaintCursorShaderStrategy interface */
+/* TODO(REFACT-STAGE-2-002): Implement PaintCursorUniformColorStrategy class */
+/* TODO(REFACT-STAGE-2-003): Implement PaintCursorTextureStrategy class */
+/* TODO(REFACT-STAGE-2-004): Add virtual destructors with override keyword */
+/* TODO(REFACT-STAGE-2-005): Follow Blender C++ standards with virtual comments */
+/**
+ * Strategy interface for managing shader binding in paint cursor drawing.
+ * Follows the Strategy pattern to decouple shader management from drawing logic.
+ */
+class PaintCursorShaderStrategy {
+ public:
+  /**
+   * Virtual destructor for proper cleanup of derived classes.
+   */
+  virtual ~PaintCursorShaderStrategy() = default;
+
+  /**
+   * Bind the appropriate shader for this strategy.
+   * @return true if shader was bound successfully, false otherwise
+   */
+  virtual bool bind_shader() = 0;
+
+  /**
+   * Unbind the shader used by this strategy.
+   */
+  virtual void unbind_shader() = 0;
+
+  /**
+   * Check if this strategy can be used in the current context.
+   * @return true if strategy is applicable, false otherwise
+   */
+  virtual bool can_use() const = 0;
+};
+
+/**
+ * Strategy for uniform color shader binding.
+ * Used for drawing solid color elements like cursor outlines.
+ */
+class PaintCursorUniformColorStrategy : public PaintCursorShaderStrategy {
+ public:
+  /**
+   * Virtual destructor for proper cleanup.
+   */
+  virtual ~PaintCursorUniformColorStrategy() = default;
+
+  /**
+   * Bind the uniform color shader.
+   * @return true if shader was bound successfully
+   */
+  virtual bool bind_shader() override {
+    immBindBuiltinProgram(GPU_SHADER_3D_UNIFORM_COLOR);
+    return true;
+  }
+
+  /**
+   * Unbind the uniform color shader.
+   */
+  virtual void unbind_shader() override {
+    immUnbindProgram();
+  }
+
+  /**
+   * Uniform color strategy can always be used.
+   * @return true
+   */
+  virtual bool can_use() const override {
+    return true;
+  }
+};
+
+/**
+ * Strategy for texture shader binding.
+ * Used for drawing textured elements like brush overlays.
+ */
+class PaintCursorTextureStrategy : public PaintCursorShaderStrategy {
+ private:
+  blender::gpu::Texture *texture_;
+  GPUSamplerExtendMode extend_mode_;
+
+ public:
+  /**
+   * Constructor for texture strategy.
+   * @param texture The texture to bind
+   * @param extend_mode The texture extend mode
+   */
+  PaintCursorTextureStrategy(blender::gpu::Texture *texture, GPUSamplerExtendMode extend_mode)
+      : texture_(texture), extend_mode_(extend_mode) {}
+
+  /**
+   * Virtual destructor for proper cleanup.
+   */
+  virtual ~PaintCursorTextureStrategy() = default;
+
+  /**
+   * Bind the texture shader with the specified texture.
+   * @return true if shader was bound successfully
+   */
+  virtual bool bind_shader() override {
+    if (!texture_) {
+      return false;
+    }
+    
+    // Check if shader is already bound
+    if (immIsShaderBound()) {
+      immUnbindProgram();
+    }
+    
+    immBindBuiltinProgram(GPU_SHADER_3D_IMAGE_COLOR);
+    immBindTextureSampler(
+        "image", texture_, {GPU_SAMPLER_FILTERING_LINEAR, extend_mode_, extend_mode_});
+    return true;
+  }
+
+  /**
+   * Unbind the texture shader.
+   */
+  virtual void unbind_shader() override {
+    if (texture_) {
+      GPU_texture_unbind(texture_);
+    }
+    
+    immUnbindProgram();
+  }
+
+  /**
+   * Check if texture strategy can be used.
+   * @return true if texture is valid
+   */
+  virtual bool can_use() const override {
+    return texture_ != nullptr;
+  }
+};
+
+/* TODO(REFACT-STAGE-1-001): Implement PaintCursorGPUStateGuard class with RAII pattern */
+/* TODO(REFACT-STAGE-1-002): Save and restore GPU blend state automatically */
+/* TODO(REFACT-STAGE-1-003): Save and restore GPU depth test state automatically */
+/* TODO(REFACT-STAGE-1-004): Save and restore IMM shader state automatically */
+/* TODO(REFACT-STAGE-1-005): Delete copy constructor and assignment operator */
+/**
+ * RAII guard for managing GPU state during paint cursor drawing.
+ * Automatically saves and restores GPU blend, depth test, and shader states.
+ */
+class PaintCursorGPUStateGuard {
+ private:
+  GPUBlend saved_blend_state_;
+  GPUDepthTest saved_depth_test_state_;
+  blender::gpu::Shader *saved_shader_;
+  bool was_shader_bound_;
+
+ public:
+  /**
+   * Constructor: Save current GPU state.
+   */
+  PaintCursorGPUStateGuard() : saved_shader_(nullptr), was_shader_bound_(false) {
+    /* Save current GPU states */
+    saved_blend_state_ = GPU_blend_get();
+    saved_depth_test_state_ = GPU_depth_test_get();
+
+    /* Save current IMM shader if one is bound */
+    if (immIsShaderBound()) {
+      was_shader_bound_ = true;
+      saved_shader_ = nullptr; /* Cannot get current shader, will restore default */
+      /* Don't unbind here - let the calling code manage shader binding */
+    }
+  }
+
+  /**
+   * Destructor: Restore saved GPU state.
+   */
+  ~PaintCursorGPUStateGuard() {
+    /* Don't restore IMM shader state - let the calling code manage it */
+    /* The calling code will handle shader binding/unbinding */
+
+    /* Restore GPU states */
+    GPU_blend(saved_blend_state_);
+    GPU_depth_test(saved_depth_test_state_);
+  }
+
+  /* Delete copy constructor and assignment operator to prevent copying */
+  PaintCursorGPUStateGuard(const PaintCursorGPUStateGuard &) = delete;
+  PaintCursorGPUStateGuard &operator=(const PaintCursorGPUStateGuard &) = delete;
+};
+
+/* Command Pattern implementation completed for Stage 3 */
+
+/**
+ * Command interface for paint cursor drawing operations.
+ * Follows the Command pattern to encapsulate drawing operations as objects.
+ */
+class PaintCursorDrawCommand {
+ public:
+  /**
+   * Virtual destructor for proper cleanup of derived classes.
+   */
+  virtual ~PaintCursorDrawCommand() = default;
+
+  /**
+   * Execute the drawing command.
+   * @return true if command executed successfully, false otherwise
+   */
+  virtual bool execute() = 0;
+
+  /**
+   * Check if this command can be executed in the current context.
+   * @return true if command can be executed, false otherwise
+   */
+  virtual bool can_execute() const = 0;
+
+  /**
+   * Get a description of what this command does.
+   * @return String description of the command
+   */
+  virtual const char *get_description() const = 0;
+};
+
+/**
+ * Command for drawing texture overlay in 3D cursor.
+ * Encapsulates the texture drawing operation.
+ */
+class PaintCursorDrawTextureCommand : public PaintCursorDrawCommand {
+ private:
+  Paint *paint_;
+  Brush *brush_;
+  ViewContext *vc_;
+  float zoom_;
+  PaintMode mode_;
+  bool col_;
+  bool primary_;
+  float radius_;
+  float brush_rotation_;
+  const float *location_;
+  const float *normal_;
+
+ public:
+  /**
+   * Constructor for texture drawing command.
+   */
+  PaintCursorDrawTextureCommand(Paint *paint,
+                                Brush *brush,
+                                ViewContext *vc,
+                                float zoom,
+                                PaintMode mode,
+                                bool col,
+                                bool primary,
+                                float radius,
+                                float brush_rotation,
+                                const float location[3],
+                                const float normal[3])
+      : paint_(paint),
+        brush_(brush),
+        vc_(vc),
+        zoom_(zoom),
+        mode_(mode),
+        col_(col),
+        primary_(primary),
+        radius_(radius),
+        brush_rotation_(brush_rotation),
+        location_(location),
+        normal_(normal) {}
+
+  /**
+   * Virtual destructor for proper cleanup.
+   */
+  virtual ~PaintCursorDrawTextureCommand() = default;
+
+  /**
+   * Execute the texture drawing command.
+   * @return true if texture was drawn successfully
+   */
+  virtual bool execute() override {
+    return blender::ed::sculpt_paint::paint_draw_tex_overlay_3d(paint_, brush_, vc_, zoom_, mode_, col_, primary_, radius_, brush_rotation_, location_, normal_);
+  }
+
+  /**
+   * Check if texture command can be executed.
+   * @return true if all required parameters are valid
+   */
+  virtual bool can_execute() const override {
+    return paint_ && brush_ && vc_ && radius_ > 0.0f;
+  }
+
+  /**
+   * Get description of the texture command.
+   * @return Description string
+   */
+  virtual const char *get_description() const override {
+    return "Draw texture overlay in 3D cursor";
+  }
+};
+
+/**
+ * Command for drawing circle outline in 3D cursor.
+ * Encapsulates the circle drawing operation.
+ */
+class PaintCursorDrawCircleCommand : public PaintCursorDrawCommand {
+ private:
+  float location_[3];
+  float radius_;
+  float color_[3];
+  float alpha_;
+  uint pos_;  /* GPU attribute for drawing */
+
+ public:
+  /**
+   * Constructor for circle drawing command.
+   */
+  PaintCursorDrawCircleCommand(const float location[3],
+                               float radius,
+                               const float color[3],
+                               float alpha,
+                               uint pos)
+      : radius_(radius), alpha_(alpha), pos_(pos) {
+    copy_v3_v3(location_, location);
+    copy_v3_v3(color_, color);
+  }
+
+  /**
+   * Virtual destructor for proper cleanup.
+   */
+  virtual ~PaintCursorDrawCircleCommand() = default;
+
+  /**
+   * Execute the circle drawing command.
+   * @return true if circle was drawn successfully
+   */
+  virtual bool execute() override {
+    /* Save current GPU state */
+    PaintCursorGPUStateGuard gpu_state_guard;
+    
+    /* Set color and alpha */
+    immUniformColor3fvAlpha(color_, alpha_);
+    
+    /* Set line width for circle outline */
+    GPU_line_width(2.0f);
+    
+    /* Draw the circle wireframe in 3D */
+    imm_draw_circle_wire_3d(pos_, 0, 0, radius_, 80);
+    
+    return true;
+  }
+
+  /**
+   * Check if circle command can be executed.
+   * @return true if all required parameters are valid
+   */
+  virtual bool can_execute() const override {
+    return radius_ > 0.0f && alpha_ > 0.0f;
+  }
+
+  /**
+   * Get description of the circle command.
+   * @return Description string
+   */
+  virtual const char *get_description() const override {
+    return "Draw circle outline in 3D cursor";
+  }
+};
+
+/**
+ * Command for drawing main cursor outline in 3D cursor.
+ * Encapsulates the main cursor drawing operation with outer and inner circles.
+ */
+class PaintCursorDrawMainCursorCommand : public PaintCursorDrawCommand {
+ private:
+  uint pos_;           /* GPU attribute for drawing */
+  float radius_;       /* Cursor radius */
+  float outline_col_[3]; /* Outline color */
+  float outline_alpha_; /* Outline alpha */
+  Paint *paint_;       /* Paint context */
+  Brush *brush_;       /* Brush for alpha calculation */
+
+ public:
+  /**
+   * Constructor for main cursor drawing command.
+   */
+  PaintCursorDrawMainCursorCommand(uint pos,
+                                   float radius,
+                                   const float outline_col[3],
+                                   float outline_alpha,
+                                   Paint *paint,
+                                   Brush *brush)
+      : pos_(pos),
+        radius_(radius),
+        outline_alpha_(outline_alpha),
+        paint_(paint),
+        brush_(brush) {
+    copy_v3_v3(outline_col_, outline_col);
+  }
+
+  /**
+   * Virtual destructor for proper cleanup.
+   */
+  virtual ~PaintCursorDrawMainCursorCommand() = default;
+
+  /**
+   * Execute the main cursor drawing command.
+   * @return true if cursor was drawn successfully
+   */
+  virtual bool execute() override {
+    /* Save current GPU state */
+    PaintCursorGPUStateGuard gpu_state_guard;
+    
+    /* Draw outer circle */
+    immUniformColor3fvAlpha(outline_col_, outline_alpha_);
+    GPU_line_width(2.0f);
+    imm_draw_circle_wire_3d(pos_, 0, 0, radius_, 80);
+
+    /* Draw inner circle with alpha falloff */
+    GPU_line_width(1.0f);
+    immUniformColor3fvAlpha(outline_col_, outline_alpha_ * 0.5f);
+    imm_draw_circle_wire_3d(
+        pos_,
+        0,
+        0,
+        radius_ * clamp_f(BKE_brush_alpha_get(paint_, brush_), 0.0f, 1.0f),
+        80);
+    
+    return true;
+  }
+
+  /**
+   * Check if main cursor command can be executed.
+   * @return true if all required parameters are valid
+   */
+  virtual bool can_execute() const override {
+    return pos_ != 0 && radius_ > 0.0f && paint_ && brush_;
+  }
+
+  /**
+   * Get description of the main cursor command.
+   * @return Description string
+   */
+  virtual const char *get_description() const override {
+    return "Draw main cursor outline in 3D cursor";
+  }
+};
+
+static int same_tex_snap(TexSnapshot *snap,
+                         MTex *mtex,
+                         ViewContext *vc,
+                         bool col,
+                         float zoom,
+                         Brush *brush)
 {
-  if (primary_snap.overlay_texture) {
-    GPU_texture_free(primary_snap.overlay_texture);
-  }
-  if (secondary_snap.overlay_texture) {
-    GPU_texture_free(secondary_snap.overlay_texture);
-  }
-  if (cursor_snap.overlay_texture) {
-    GPU_texture_free(cursor_snap.overlay_texture);
+  /* Check if brush or texture changed */
+  int current_brush_id = brush ? brush->id.name[2] : 0;
+  int current_texture_id = (mtex->tex && mtex->tex->id.name) ? mtex->tex->id.name[2] : 0;
+  
+  if (snap->brush_id != current_brush_id || snap->texture_id != current_texture_id) {
+    return 0; /* Brush or texture changed, need to reload */
   }
 
-  memset(&primary_snap, 0, sizeof(TexSnapshot));
-  memset(&secondary_snap, 0, sizeof(TexSnapshot));
-  memset(&cursor_snap, 0, sizeof(CursorSnapshot));
-
-  BKE_paint_invalidate_overlay_all();
-}
-
-namespace blender::ed::sculpt_paint {
-
-static int same_tex_snap(TexSnapshot *snap, MTex *mtex, ViewContext *vc, bool col, float zoom)
-{
-  return (/* make brush smaller shouldn't cause a resample */
+  int result = (/* make brush smaller shouldn't cause a resample */
           //(mtex->brush_map_mode != MTEX_MAP_MODE_VIEW ||
           //(BKE_brush_size_get(vc->scene, brush) <= snap->BKE_brush_size_get)) &&
 
@@ -138,13 +588,17 @@ static int same_tex_snap(TexSnapshot *snap, MTex *mtex, ViewContext *vc, bool co
            (vc->region->winx == snap->winx && vc->region->winy == snap->winy)) &&
           (mtex->brush_map_mode == MTEX_MAP_MODE_STENCIL || snap->old_zoom == zoom) &&
           snap->old_col == col);
+  
+  return result;
 }
 
-static void make_tex_snap(TexSnapshot *snap, ViewContext *vc, float zoom)
+static void make_tex_snap(TexSnapshot *snap, ViewContext *vc, float zoom, Brush *brush, MTex *mtex)
 {
   snap->old_zoom = zoom;
   snap->winx = vc->region->winx;
   snap->winy = vc->region->winy;
+  snap->brush_id = brush ? brush->id.name[2] : 0;
+  snap->texture_id = (mtex->tex && mtex->tex->id.name) ? mtex->tex->id.name[2] : 0;
 }
 
 struct LoadTexData {
@@ -246,7 +700,18 @@ static void load_tex_task_cb_ex(void *__restrict userdata,
 
         /* Clamp to avoid precision overflow. */
         CLAMP(avg, 0.0f, 1.0f);
-        buffer[index] = 255 - uchar(255 * avg);
+        
+        /* Convert texture intensity to alpha-based display (like radial_control):
+         * Light parts (high avg) -> dark color (low RGB) with high alpha
+         * Dark parts (low avg) -> transparent (low alpha)
+         * RGB channels store inverted intensity for dark appearance
+         * Alpha channel stores intensity for transparency control */
+        const float inverted_intensity = 1.0f - avg;
+        const int rgba_index = index * 4;
+        buffer[rgba_index] = uchar(255 * inverted_intensity);     /* R - dark for light parts */
+        buffer[rgba_index + 1] = uchar(255 * inverted_intensity); /* G - dark for light parts */
+        buffer[rgba_index + 2] = uchar(255 * inverted_intensity); /* B - dark for light parts */
+        buffer[rgba_index + 3] = uchar(255 * avg);                /* A - transparent for dark parts */
       }
     }
     else {
@@ -257,10 +722,45 @@ static void load_tex_task_cb_ex(void *__restrict userdata,
         buffer[index * 4 + 3] = 0;
       }
       else {
-        buffer[index] = 0;
+        /* Set all RGBA channels to 0 (transparent) */
+        const int rgba_index = index * 4;
+        buffer[rgba_index] = 0;     /* R */
+        buffer[rgba_index + 1] = 0; /* G */
+        buffer[rgba_index + 2] = 0; /* B */
+        buffer[rgba_index + 3] = 0; /* A */
       }
     }
   }
+}
+
+static int load_tex(Brush *br, ViewContext *vc, float zoom, bool col, bool primary);
+
+/**
+ * Check if texture needs to be reloaded based on parameter changes.
+ * This optimization prevents unnecessary texture reloading when parameters haven't changed.
+ */
+static bool needs_texture_load(const Brush *brush, float zoom, bool col, bool primary) {
+  static float last_zoom = -1.0f;
+  static int last_brush_id = -1;
+  static bool last_col = false;
+  static bool last_primary = false;
+  
+  // Check if any critical parameters have changed
+  bool changed = (zoom != last_zoom) ||
+                 (brush->id.name[2] != last_brush_id) ||
+                 (col != last_col) ||
+                 (primary != last_primary);
+  
+  if (changed) {
+    // Update cached values
+    last_zoom = zoom;
+    last_brush_id = brush->id.name[2];
+    last_col = col;
+    last_primary = primary;
+    return true;
+  }
+  
+  return false;
 }
 
 static int load_tex(Brush *br, ViewContext *vc, float zoom, bool col, bool primary)
@@ -279,19 +779,25 @@ static int load_tex(Brush *br, ViewContext *vc, float zoom, bool col, bool prima
                    (overlay_flags & PAINT_OVERLAY_INVALID_TEXTURE_SECONDARY));
   target = (primary) ? &primary_snap : &secondary_snap;
 
-  refresh = !target->overlay_texture || (invalid != 0) ||
-            !same_tex_snap(target, mtex, vc, col, zoom);
+  bool same_snap_result = same_tex_snap(target, mtex, vc, col, zoom, br);
+  refresh = !target->overlay_texture || (invalid != 0) || !same_snap_result;
 
   init = (target->overlay_texture != nullptr);
 
+  // Optimize: Early exit if texture doesn't need refresh and exists
+  if (!refresh && target->overlay_texture) {
+    return 1; // Texture is ready to use
+  }
+
   if (refresh) {
+    
     ImagePool *pool = nullptr;
     Paint *paint = BKE_paint_get_active_from_context(vc->C);
     /* Stencil is rotated later. */
     const float rotation = (mtex->brush_map_mode != MTEX_MAP_MODE_STENCIL) ? -mtex->rot : 0.0f;
     const float radius = BKE_brush_radius_get(paint, br) * zoom;
 
-    make_tex_snap(target, vc, zoom);
+    make_tex_snap(target, vc, zoom, br, mtex);
 
     if (mtex->brush_map_mode == MTEX_MAP_MODE_VIEW) {
       int s = BKE_brush_radius_get(paint, br);
@@ -320,12 +826,8 @@ static int load_tex(Brush *br, ViewContext *vc, float zoom, bool col, bool prima
       target->old_size = size;
       target->old_col = col;
     }
-    if (col) {
-      buffer = MEM_malloc_arrayN<uchar>(size * size * 4, "load_tex");
-    }
-    else {
-      buffer = MEM_malloc_arrayN<uchar>(size * size, "load_tex");
-    }
+    /* Always use RGBA format to support alpha channel for transparency */
+    buffer = MEM_malloc_arrayN<uchar>(size * size * 4, "load_tex");
 
     pool = BKE_image_pool_new();
 
@@ -358,16 +860,14 @@ static int load_tex(Brush *br, ViewContext *vc, float zoom, bool col, bool prima
     }
 
     if (!target->overlay_texture) {
-      blender::gpu::TextureFormat format = col ? blender::gpu::TextureFormat::UNORM_8_8_8_8 :
-                                                 blender::gpu::TextureFormat::UNORM_8;
+      /* Use RGBA format for both colored and grayscale textures to support alpha channel */
+      blender::gpu::TextureFormat format = blender::gpu::TextureFormat::UNORM_8_8_8_8;
       eGPUTextureUsage usage = GPU_TEXTURE_USAGE_SHADER_READ | GPU_TEXTURE_USAGE_ATTACHMENT;
       target->overlay_texture = GPU_texture_create_2d(
           "paint_cursor_overlay", size, size, 1, format, usage, nullptr);
       GPU_texture_update(target->overlay_texture, GPU_DATA_UBYTE, buffer);
 
-      if (!col) {
-        GPU_texture_swizzle_set(target->overlay_texture, "rrrr");
-      }
+      /* No swizzle needed - we already store RGB and Alpha in correct channels */
     }
 
     if (init) {
@@ -432,6 +932,11 @@ static int load_tex_cursor(Brush *br, ViewContext *vc, float zoom)
                        cursor_snap.curve_preset != br->curve_distance_falloff_preset;
 
   init = (cursor_snap.overlay_texture != nullptr);
+
+  // Optimize: Early exit if cursor texture doesn't need refresh and exists
+  if (!refresh && cursor_snap.overlay_texture) {
+    return 1; // Cursor texture is ready to use
+  }
 
   if (refresh) {
     Paint *paint = BKE_paint_get_active_from_context(vc->C);
@@ -612,7 +1117,22 @@ static bool paint_draw_tex_overlay(Paint *paint,
   }
 
   bke::PaintRuntime *paint_runtime = paint->runtime;
-  if (load_tex(brush, vc, zoom, col, primary)) {
+  
+  // Optimize: Check if texture needs to be reloaded
+  bool texture_loaded = false;
+  if (!needs_texture_load(brush, zoom, col, primary)) {
+    // Use existing texture without reloading
+    TexSnapshot *target = (primary) ? &primary_snap : &secondary_snap;
+    if (target->overlay_texture) {
+      texture_loaded = true;
+    }
+  }
+  
+  if (!texture_loaded) {
+    texture_loaded = load_tex(brush, vc, zoom, col, primary);
+  }
+  
+  if (texture_loaded) {
     GPU_color_mask(true, true, true, true);
     GPU_depth_test(GPU_DEPTH_NONE);
 
@@ -1275,6 +1795,17 @@ enum class PaintCursorDrawingType {
   Cursor3D,
 };
 
+/**
+ * State Machine для Context Manager управления жизненным циклом отрисовки.
+ * Отслеживает текущее состояние контекста для предотвращения ошибок использования.
+ */
+enum class PaintCursorContextState {
+  CLEAN,              // Начальное состояние после инициализации
+  IMM_SETUP,          // IMM shader установлен, GPU format настроен
+  TEXTURE_DRAWING,    // Текстурная стратегия активна
+  RESTORED            // Состояние восстановлено, контекст завершен
+};
+
 struct PaintCursorContext {
   bContext *C;
   ARegion *region;
@@ -1314,6 +1845,13 @@ struct PaintCursorContext {
   /* GPU attribute for drawing. */
   uint pos;
 
+  /* TODO(REFACT-STAGE-2-006): Add shader_strategy field to PaintCursorContext */
+  std::unique_ptr<PaintCursorShaderStrategy> shader_strategy;
+
+  /* Context Manager State Machine */
+  PaintCursorContextState state = PaintCursorContextState::CLEAN;
+  std::optional<PaintCursorGPUStateGuard> gpu_guard;
+
   PaintCursorDrawingType cursor_type;
 
   /* This variable is set after drawing the overlay, not on initialization. It can't be used for
@@ -1331,7 +1869,121 @@ struct PaintCursorContext {
 
   float final_radius;
   int pixel_radius;
+
+  /* Performance optimization: Cached results for expensive checks */
+  bool brush_cursor_enabled_cached = false;
+  bool overlay_conditions_met_cached = false;
+  uint64_t last_brush_id = 0;
+  bool cache_valid = false;
+
+  /* Check if brush has changed since last cache update */
+  bool brush_changed() const {
+    return brush && (brush->id.name[2] != last_brush_id);
+  }
+
+  /* Update cache when brush changes */
+  void update_cache() {
+    if (brush_changed()) {
+      // Forward declaration needed - will be defined later
+      brush_cursor_enabled_cached = false; // Temporary fix
+      overlay_conditions_met_cached = brush && (brush->overlay_flags & (BRUSH_OVERLAY_PRIMARY | BRUSH_OVERLAY_SECONDARY));
+      last_brush_id = brush->id.name[2];
+      cache_valid = true;
+    }
+  }
 };
+
+/**
+ * Context Manager: Setup 3D drawing context with state validation.
+ * Initializes GPU state guard, sets up IMM shader and vertex format for 3D drawing.
+ */
+static void paint_cursor_context_setup_3D_drawing(PaintCursorContext &pcontext)
+{
+  BLI_assert(pcontext.state == PaintCursorContextState::CLEAN);
+  
+  /* Создание RAII guard для автоматического управления GPU состоянием */
+  pcontext.gpu_guard.emplace();
+  
+  /* Настройка GPU для 3D отрисовки */
+  GPU_line_width(2.0f);
+  GPU_blend(GPU_BLEND_ALPHA);
+  GPU_line_smooth(true);
+  
+  /* Установка vertex format для 3D */
+  pcontext.pos = GPU_vertformat_attr_add(
+      immVertexFormat(), "pos", blender::gpu::VertAttrType::SFLOAT_32_32_32);
+  
+  /* Установка uniform color shader strategy */
+  immBindBuiltinProgram(GPU_SHADER_3D_UNIFORM_COLOR);
+  
+  /* Переход в состояние IMM_SETUP */
+  pcontext.state = PaintCursorContextState::IMM_SETUP;
+}
+
+/**
+ * Context Manager: Draw texture overlay through command pattern with state validation.
+ * Creates and executes texture drawing command, managing state transitions.
+ */
+static bool paint_cursor_context_draw_texture(PaintCursorContext &pcontext,
+                                               float radius)
+{
+  BLI_assert(pcontext.state == PaintCursorContextState::IMM_SETUP);
+  
+  /* Переход в состояние TEXTURE_DRAWING */
+  pcontext.state = PaintCursorContextState::TEXTURE_DRAWING;
+  
+  /* Создание и выполнение команды отрисовки текстуры */
+  bke::PaintRuntime *paint_runtime = pcontext.paint->runtime;
+  auto texture_cmd = std::make_unique<PaintCursorDrawTextureCommand>(
+      pcontext.paint,
+      pcontext.brush,
+      &pcontext.vc,
+      pcontext.zoomx,
+      pcontext.mode,
+      false, /* col */
+      true,  /* primary */
+      radius,
+      paint_runtime->brush_rotation,
+      pcontext.location,
+      pcontext.normal);
+  
+  bool result = false;
+  if (texture_cmd->can_execute()) {
+    result = texture_cmd->execute();
+  }
+  
+  /* Возврат в состояние IMM_SETUP после отрисовки текстуры */
+  pcontext.state = PaintCursorContextState::IMM_SETUP;
+  
+  return result;
+}
+
+/**
+ * Context Manager: Restore drawing state and cleanup resources with state validation.
+ * Unbinds IMM shader, cleans up GPU state guard, and transitions to final state.
+ */
+static void paint_cursor_context_restore_drawing_state(PaintCursorContext &pcontext)
+{
+  BLI_assert(pcontext.state == PaintCursorContextState::IMM_SETUP || 
+             pcontext.state == PaintCursorContextState::TEXTURE_DRAWING);
+  
+  /* Unbind IMM shader */
+  if (immIsShaderBound()) {
+    immUnbindProgram();
+  }
+  
+  /* Очистка GPU состояний через RAII guard */
+  if (pcontext.gpu_guard.has_value()) {
+    pcontext.gpu_guard.reset();
+  }
+  
+  /* Восстановление GPU состояний */
+  GPU_blend(GPU_BLEND_NONE);
+  GPU_line_smooth(false);
+  
+  /* Переход в финальное состояние */
+  pcontext.state = PaintCursorContextState::RESTORED;
+}
 
 static bool paint_cursor_context_init(bContext *C,
                                       const blender::int2 &xy,
@@ -1476,7 +2128,34 @@ static void paint_cursor_sculpt_session_update_and_init(PaintCursorContext &pcon
   paint_cursor_update_pixel_radius(pcontext);
 
   if (BKE_brush_use_locked_size(pcontext.paint, &brush)) {
-    BKE_brush_size_set(pcontext.paint, &brush, pcontext.pixel_radius);
+    /* In Scene mode (use_locked_size = 1), size is calculated dynamically from unprojected_size
+     * during rendering. We should NOT update brush.size here from pixel_radius, because:
+     * 1. pixel_radius may be incorrect immediately after mode switching
+     * 2. size should be recalculated from unprojected_size based on current view, not cached
+     * 3. When user sets unprojected_size via UI (e.g., 1000), size should update correctly
+     *    from that value, not be blocked by incorrect pixel_radius calculations.
+     * 
+     * However, we can update size if pixel_radius is reasonable and cursor is over mesh,
+     * to keep size in sync for display purposes. But we must be very conservative. */
+    int current_size = BKE_brush_size_get(pcontext.paint, &brush);
+    int new_size = pcontext.pixel_radius;
+    
+    /* Only update size if:
+     * 1. Cursor is over mesh (pixel_radius is reliable)
+     * 2. Size change is reasonable (not too extreme)
+     * 3. New size is not too small (at least 10 pixels)
+     * This ensures size stays in sync when valid, but doesn't break when unprojected_size
+     * is set to large values (like 1000) via UI. */
+    if (pcontext.is_cursor_over_mesh && std::abs(current_size - new_size) > 1) {
+      float size_ratio = (current_size > 0) ? float(new_size) / float(current_size) : 1.0f;
+      
+      bool size_too_small = (new_size < 10);
+      bool ratio_too_extreme = (size_ratio < 0.5f || size_ratio > 2.0f);
+      
+      if (!size_too_small && !ratio_too_extreme) {
+        BKE_brush_size_set(pcontext.paint, &brush, new_size);
+      }
+    }
   }
 
   if (pcontext.is_cursor_over_mesh) {
@@ -1989,8 +2668,44 @@ static void paint_cursor_draw_3d_view_brush_cursor_inactive(PaintCursorContext &
    */
   GPU_matrix_push();
   paint_cursor_drawing_setup_cursor_space(pcontext);
+  
   /* Main inactive cursor. */
   paint_cursor_draw_main_inactive_cursor(pcontext);
+
+  /* Draw texture overlay if enabled for inactive cursor */
+  if (brush.overlay_flags & (BRUSH_OVERLAY_PRIMARY | BRUSH_OVERLAY_SECONDARY)) {
+    bke::PaintRuntime *paint_runtime = pcontext.paint->runtime;
+    
+    /* Primary texture overlay */
+    if (brush.overlay_flags & BRUSH_OVERLAY_PRIMARY) {
+      paint_draw_tex_overlay_3d(pcontext.paint,
+                               pcontext.brush,
+                               &pcontext.vc,
+                               pcontext.zoomx,
+                               pcontext.mode,
+                               false, /* col */
+                               true,  /* primary */
+                               pcontext.radius,
+                               paint_runtime->brush_rotation,
+                               pcontext.location,
+                               pcontext.normal);
+    }
+    
+    /* Secondary texture overlay */
+    if (brush.overlay_flags & BRUSH_OVERLAY_SECONDARY) {
+      paint_draw_tex_overlay_3d(pcontext.paint,
+                               pcontext.brush,
+                               &pcontext.vc,
+                               pcontext.zoomx,
+                               pcontext.mode,
+                               false, /* col */
+                               false, /* secondary */
+                               pcontext.radius,
+                               paint_runtime->brush_rotation_sec,
+                               pcontext.location,
+                               pcontext.normal);
+    }
+  }
 
   /* Cloth brush local simulation areas. */
   if (is_brush_tool && brush.sculpt_brush_type == SCULPT_BRUSH_TYPE_CLOTH &&
@@ -2092,6 +2807,46 @@ static void paint_cursor_cursor_draw_3d_view_brush_cursor_active(PaintCursorCont
     }
   }
 
+  /* Draw texture overlay if enabled for active cursor - BEFORE matrix pop */
+  
+  if (brush.overlay_flags & (BRUSH_OVERLAY_PRIMARY | BRUSH_OVERLAY_SECONDARY)) {
+    bke::PaintRuntime *paint_runtime = pcontext.paint->runtime;
+    
+    /* Для активного курсора используем данные из cache, если доступны */
+    const float *location = ss.cache ? ss.cache->location : pcontext.location;
+    const float *normal = ss.cache ? ss.cache->sculpt_normal : pcontext.normal;
+    
+    /* Primary texture overlay */
+    if (brush.overlay_flags & BRUSH_OVERLAY_PRIMARY) {
+      paint_draw_tex_overlay_3d(pcontext.paint,
+                               pcontext.brush,
+                               &pcontext.vc,
+                               pcontext.zoomx,
+                               pcontext.mode,
+                               false, /* col */
+                               true,  /* primary */
+                               pcontext.radius,
+                               paint_runtime->brush_rotation,
+                               location,
+                               normal);
+    }
+    
+    /* Secondary texture overlay */
+    if (brush.overlay_flags & BRUSH_OVERLAY_SECONDARY) {
+      paint_draw_tex_overlay_3d(pcontext.paint,
+                               pcontext.brush,
+                               &pcontext.vc,
+                               pcontext.zoomx,
+                               pcontext.mode,
+                               false, /* col */
+                               false, /* secondary */
+                               pcontext.radius,
+                               paint_runtime->brush_rotation_sec,
+                               location,
+                               normal);
+    }
+  }
+
   GPU_matrix_pop();
 
   GPU_matrix_pop_projection();
@@ -2100,14 +2855,13 @@ static void paint_cursor_cursor_draw_3d_view_brush_cursor_active(PaintCursorCont
 
 static void paint_cursor_draw_3D_view_brush_cursor(PaintCursorContext &pcontext)
 {
-
   /* These paint tools are not using the SculptSession, so they need to use the default 2D brush
    * cursor in the 3D view. */
   if (pcontext.mode != PaintMode::Sculpt || !pcontext.ss) {
     paint_draw_legacy_3D_view_brush_cursor(pcontext);
     return;
   }
-
+  
   paint_cursor_sculpt_session_update_and_init(pcontext);
 
   if (pcontext.is_stroke_active) {
@@ -2181,16 +2935,10 @@ static void paint_cursor_setup_2D_drawing(PaintCursorContext &pcontext)
   immBindBuiltinProgram(GPU_SHADER_3D_UNIFORM_COLOR);
 }
 
-static void paint_cursor_setup_3D_drawing(PaintCursorContext &pcontext)
-{
-  GPU_line_width(2.0f);
-  GPU_blend(GPU_BLEND_ALPHA);
-  GPU_line_smooth(true);
-  pcontext.pos = GPU_vertformat_attr_add(
-      immVertexFormat(), "pos", blender::gpu::VertAttrType::SFLOAT_32_32_32);
-  immBindBuiltinProgram(GPU_SHADER_3D_UNIFORM_COLOR);
-}
-
+/**
+ * Restore GPU drawing state for 2D cursor (legacy function for compatibility).
+ * This function is kept for 2D cursor support while 3D cursor uses Context Manager.
+ */
 static void paint_cursor_restore_drawing_state()
 {
   immUnbindProgram();
@@ -2207,7 +2955,7 @@ static void paint_draw_cursor(bContext *C,
   if (!paint_cursor_context_init(C, xy, tilt, pcontext)) {
     return;
   }
-
+  
   if (!paint_cursor_is_brush_cursor_enabled(pcontext)) {
     /* For Grease Pencil draw mode, we want to we only render a small mouse cursor (dot) if the
      * paint cursor is disabled so that the default mouse cursor doesn't get in the way of tablet
@@ -2223,7 +2971,7 @@ static void paint_draw_cursor(bContext *C,
     paint_cursor_check_and_draw_alpha_overlays(pcontext);
     return;
   }
-
+  
   switch (pcontext.cursor_type) {
     case PaintCursorDrawingType::Curve:
       paint_draw_curve_cursor(pcontext.brush, &pcontext.vc);
@@ -2246,18 +2994,289 @@ static void paint_draw_cursor(bContext *C,
       paint_cursor_check_and_draw_alpha_overlays(pcontext);
       paint_cursor_update_anchored_location(pcontext);
 
-      paint_cursor_setup_3D_drawing(pcontext);
+      /* Context Manager: Setup 3D drawing через контекст */
+      paint_cursor_context_setup_3D_drawing(pcontext);
+
+      /* Отрисовка 3D курсора */
       paint_cursor_draw_3D_view_brush_cursor(pcontext);
-      paint_cursor_restore_drawing_state();
+
+      /* Context Manager: Restore через контекст */
+      paint_cursor_context_restore_drawing_state(pcontext);
       break;
     default:
       BLI_assert_unreachable();
   }
 }
 
+/**
+ * Преобразует brush_rotation из экранных координат в угол в пространстве курсора.
+ * Использует ту же логику, что и calc_brush_local_mat, чтобы preview соответствовал штриху.
+ *
+ * @param vc ViewContext для преобразования координат
+ * @param location Локальная позиция курсора (в координатах объекта)
+ * @param normal Нормаль поверхности в локальных координатах объекта
+ * @param brush_rotation_screen Угол в экранных координатах (из paint_runtime->brush_rotation)
+ * @return Угол в пространстве курсора (для применения через GPU_matrix_rotate_axis)
+ */
+static float brush_rotation_to_cursor_space(const ViewContext &vc,
+                                            const float location[3],
+                                            const float normal[3],
+                                            float brush_rotation_screen)
+{
+  Object &ob = *vc.obact;
+
+  /* Edge case: если нормаль равна нулю, вернуть исходный угол */
+  if (len_squared_v3(normal) < 1e-6f) {
+    return brush_rotation_screen;
+  }
+
+  /* 1. Угол → направление в экранных координатах
+   * По соглашению из calc_brush_local_mat:
+   * motion direction указывает по оси Y кисти
+   * angle представляет ось X, normal - это 90 градусов CCW от motion direction
+   */
+  float motion_normal_screen[2];
+  motion_normal_screen[0] = cosf(brush_rotation_screen);
+  motion_normal_screen[1] = sinf(brush_rotation_screen);
+
+  /* 2. Преобразование в локальные координаты объекта (копия логики calc_local_from_screen) */
+  float loc[3];
+  mul_v3_m4v3(loc, ob.object_to_world().ptr(), location);
+  const float zfac = ED_view3d_calc_zfac(vc.rv3d, loc);
+
+  float motion_normal_world[3];
+  ED_view3d_win_to_delta(vc.region, motion_normal_screen, zfac, motion_normal_world);
+  normalize_v3(motion_normal_world);
+
+  float motion_normal_local[3];
+  /* Добавляем позицию объекта в мировых координатах (как в calc_local_from_screen) */
+  add_v3_v3(motion_normal_world, ob.loc);
+  mul_m4_v3(ob.world_to_object().ptr(), motion_normal_world);
+  copy_v3_v3(motion_normal_local, motion_normal_world);
+  normalize_v3(motion_normal_local);
+
+  /* 3. Вычисление направления движения (Y-ось кисти) в локальном пространстве
+   * Y-ось кисти лежит в пересечении плоскости касательной и плоскости движения
+   */
+  float motion_dir_local[3];
+  cross_v3_v3v3(motion_dir_local, normal, motion_normal_local);
+  const float motion_dir_len = len_v3(motion_dir_local);
+
+  /* Edge case: если направление движения параллельно нормали */
+  if (motion_dir_len < 1e-6f) {
+    /* Возвращаем исходный угол без преобразования */
+    return brush_rotation_screen;
+  }
+  normalize_v3(motion_dir_local);
+
+  /* 4. Вычисление X-оси кисти в локальном пространстве */
+  float brush_x_local[3];
+  cross_v3_v3v3(brush_x_local, motion_dir_local, normal);
+  normalize_v3(brush_x_local);
+
+  /* 5. Преобразование осей кисти в пространство курсора
+   * Пространство курсора: Z = нормаль, нужно найти X и Y в плоскости поверхности
+   * Используем ту же логику, что и в paint_cursor_drawing_setup_cursor_space:
+   * создаем матрицу поворота через AxisAngle и извлекаем из неё X и Y оси
+   */
+  const float3 z_axis = {0.0f, 0.0f, 1.0f};
+  const float3 normal_vec = {normal[0], normal[1], normal[2]};
+  
+  /* Создаем поворот, выравнивающий нормаль с осью Z (как в paint_cursor_drawing_setup_cursor_space) */
+  const math::AxisAngle between_vecs(z_axis, normal_vec);
+  const float4x4 cursor_rot = math::from_rotation<float4x4>(between_vecs);
+  
+  /* Извлекаем X и Y оси из матрицы поворота
+   * В пространстве курсора: X = первая колонка, Y = вторая колонка, Z = третья колонка (нормаль)
+   * Матрица поворота преобразует из пространства курсора в локальное пространство объекта
+   */
+  const float(*rot_ptr)[4] = cursor_rot.ptr();
+  float cursor_x[3];
+  cursor_x[0] = rot_ptr[0][0];
+  cursor_x[1] = rot_ptr[1][0];
+  cursor_x[2] = rot_ptr[2][0];
+  
+  float cursor_y[3];
+  cursor_y[0] = rot_ptr[0][1];
+  cursor_y[1] = rot_ptr[1][1];
+  cursor_y[2] = rot_ptr[2][1];
+  
+  /* Проверяем, что оси нормализованы (должны быть, но на всякий случай) */
+  normalize_v3(cursor_x);
+  normalize_v3(cursor_y);
+
+  /* 6. Вычисление угла между X-осью курсора и X-осью кисти в плоскости поверхности
+   * Это угол, на который нужно повернуть текстуру в пространстве курсора
+   */
+  float dot_x = dot_v3v3(brush_x_local, cursor_x);
+  float dot_y = dot_v3v3(brush_x_local, cursor_y);
+  float angle = atan2f(dot_y, dot_x);
+
+  return angle;
+}
+
+bool paint_draw_tex_overlay_3d(Paint *paint,
+                               Brush *brush,
+                               ViewContext *vc,
+                               float zoom,
+                               const PaintMode mode,
+                               bool col,
+                               bool primary,
+                               float radius,
+                               float brush_rotation,
+                               const float location[3],
+                               const float normal[3])
+{
+  /* Check for overlay mode. */
+  MTex *mtex = (primary) ? &brush->mtex : &brush->mask_mtex;
+  bool valid = ((primary) ? (brush->overlay_flags & BRUSH_OVERLAY_PRIMARY) != 0 :
+                            (brush->overlay_flags & BRUSH_OVERLAY_SECONDARY) != 0);
+  int overlay_alpha = (primary) ? brush->texture_overlay_alpha : brush->mask_overlay_alpha;
+
+  if (mode == PaintMode::Texture3D) {
+    if (primary && brush->image_brush_type != IMAGE_PAINT_BRUSH_TYPE_DRAW) {
+      /* All non-draw tools don't use the primary texture (clone, smear, soften.. etc). */
+      return false;
+    }
+  }
+
+  bool texture_condition = !(mtex->tex) ||
+      !((mtex->brush_map_mode == MTEX_MAP_MODE_STENCIL) ||
+        (valid && ELEM(mtex->brush_map_mode, MTEX_MAP_MODE_VIEW, MTEX_MAP_MODE_TILED, MTEX_MAP_MODE_AREA)));
+  
+  if (texture_condition) {
+    return false;
+  }
+
+  bool is_brush_tool = WM_toolsystem_active_tool_is_brush(vc->C);
+  
+  if (!is_brush_tool) {
+    return false;
+  }
+
+  // Declare load_result early to avoid goto issues
+  int load_result = 0;
+
+  // Always call load_tex - it will check if texture needs reloading via same_tex_snap
+  // which properly checks both brush_id and texture_id
+  load_result = load_tex(brush, vc, zoom, col, primary);
+  
+  if (load_result) {
+    /* TODO(REFACT-STAGE-1-006): Replace manual state management with PaintCursorGPUStateGuard */
+    PaintCursorGPUStateGuard gpu_state_guard;
+
+    GPU_color_mask(true, true, true, true);
+    GPU_depth_test(GPU_DEPTH_NONE);
+
+    /* Setup vertex format for 3D coordinates */
+    GPUVertFormat *format = immVertexFormat();
+    uint pos = GPU_vertformat_attr_add(format, "pos", blender::gpu::VertAttrType::SFLOAT_32_32_32);
+    uint texCoord = GPU_vertformat_attr_add(format, "texCoord", blender::gpu::VertAttrType::SFLOAT_32_32);
+
+    /* Alpha blending for texture overlay with transparency. */
+    GPU_blend(GPU_BLEND_ALPHA);
+
+    /* Handle anchored mode and pressure scaling */
+    bke::PaintRuntime *paint_runtime = paint->runtime;
+    
+    /* Scale based on tablet pressure for primary brush */
+    if (primary && paint_runtime->stroke_active && BKE_brush_use_size_pressure(brush)) {
+      const float scale = paint_runtime->size_pressure_value;
+      GPU_matrix_push();
+      GPU_matrix_scale_2f(scale, scale);
+    }
+
+    /* TODO(REFACT-STAGE-2-008): Use PaintCursorTextureStrategy for texture drawing */
+    blender::gpu::Texture *texture = (primary) ? primary_snap.overlay_texture :
+                                                 secondary_snap.overlay_texture;
+    GPUSamplerExtendMode extend_mode = (mtex->brush_map_mode == MTEX_MAP_MODE_VIEW || mtex->brush_map_mode == MTEX_MAP_MODE_AREA) ?
+                                           GPU_SAMPLER_EXTEND_MODE_CLAMP_TO_BORDER :
+                                           GPU_SAMPLER_EXTEND_MODE_REPEAT;
+
+  PaintCursorTextureStrategy texture_strategy(texture, extend_mode);
+
+  if (!texture_strategy.bind_shader()) {
+    return false;
+  }
+
+    float final_color[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    if (!col) {
+      copy_v3_v3(final_color, U.sculpt_paint_overlay_col);
+    }
+    mul_v4_fl(final_color, overlay_alpha * 0.01f);
+    immUniformColor4fv(final_color);
+
+    /* Apply rotation (combined brush rotation + texture rotation) */
+    /* В calc_brush_local_mat используется: angle = rotation + cache->special_rotation
+     * где rotation = mtex->rot, special_rotation = brush_rotation
+     * Поэтому нужно преобразовывать сумму этих углов, а не по отдельности
+     */
+    float total_rotation = brush_rotation + mtex->rot;
+    
+    /* Для режима MTEX_MAP_MODE_AREA преобразуем угол из экранных координат в пространство курсора */
+    if (mtex->brush_map_mode == MTEX_MAP_MODE_AREA) {
+      /* Преобразуем сумму углов (как в calc_brush_local_mat: angle = rotation + special_rotation) */
+      total_rotation = brush_rotation_to_cursor_space(*vc, location, normal, total_rotation);
+    }
+    if (total_rotation != 0.0f) {
+      GPU_matrix_push();
+      GPU_matrix_rotate_axis(RAD2DEGF(total_rotation), 'Z');
+    }
+
+    /* Draw textured quad in 3D cursor space */
+    immBegin(GPU_PRIM_TRI_FAN, 4);
+    immAttr2f(texCoord, 0.0f, 0.0f);
+    immVertex3f(pos, -radius, -radius, 0.0f);
+    immAttr2f(texCoord, 1.0f, 0.0f);
+    immVertex3f(pos, radius, -radius, 0.0f);
+    immAttr2f(texCoord, 1.0f, 1.0f);
+    immVertex3f(pos, radius, radius, 0.0f);
+    immAttr2f(texCoord, 0.0f, 1.0f);
+    immVertex3f(pos, -radius, radius, 0.0f);
+    immEnd();
+
+    /* Restore GPU state */
+    texture_strategy.unbind_shader();
+
+    if (total_rotation != 0.0f) {
+      GPU_matrix_pop();
+    }
+
+    /* Restore pressure scaling matrix */
+    if (primary && paint_runtime->stroke_active && BKE_brush_use_size_pressure(brush)) {
+      GPU_matrix_pop();
+    }
+
+  return true;
+  }
+
+  return false;
+}
+
+void paint_cursor_delete_textures()
+{
+  if (primary_snap.overlay_texture) {
+    GPU_texture_free(primary_snap.overlay_texture);
+  }
+  if (secondary_snap.overlay_texture) {
+    GPU_texture_free(secondary_snap.overlay_texture);
+  }
+  if (cursor_snap.overlay_texture) {
+    GPU_texture_free(cursor_snap.overlay_texture);
+  }
+
+  /* Reset snapshots, including brush_id and texture_id */
+  memset(&primary_snap, 0, sizeof(TexSnapshot));
+  memset(&secondary_snap, 0, sizeof(TexSnapshot));
+  memset(&cursor_snap, 0, sizeof(CursorSnapshot));
+
+  BKE_paint_invalidate_overlay_all();
+}
+
 }  // namespace blender::ed::sculpt_paint
 
-/* Public API */
+/* C API exports */
+extern "C" {
 
 void ED_paint_cursor_start(Paint *paint, bool (*poll)(bContext *C))
 {
@@ -2269,3 +3288,10 @@ void ED_paint_cursor_start(Paint *paint, bool (*poll)(bContext *C))
   /* Invalidate the paint cursors. */
   BKE_paint_invalidate_overlay_all();
 }
+
+void paint_cursor_delete_textures()
+{
+  blender::ed::sculpt_paint::paint_cursor_delete_textures();
+}
+
+}  // extern "C"

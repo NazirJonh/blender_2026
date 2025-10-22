@@ -200,7 +200,15 @@ void BRUSH_OT_asset_revert(wmOperatorType *ot);
 /**
  * Delete overlay cursor textures to preserve memory and invalidate all overlay flags.
  */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 void paint_cursor_delete_textures();
+
+#ifdef __cplusplus
+}
+#endif
 
 /* `paint_vertex.cc` */
 
