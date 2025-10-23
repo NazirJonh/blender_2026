@@ -20,6 +20,7 @@ set(INC_SYS
 set(SRC
   intern/asset_catalog.cc
   intern/asset_filter.cc
+  intern/asset_image_utils.cc
   intern/asset_import.cc
   intern/asset_indexer.cc
   intern/asset_library_reference_enum.cc
@@ -40,6 +41,7 @@ set(SRC
 
   ED_asset_catalog.hh
   ED_asset_filter.hh
+  ED_asset_image_utils.hh
   ED_asset_import.hh
   ED_asset_indexer.hh
   ED_asset_library.hh

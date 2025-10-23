@@ -1043,6 +1043,24 @@ void rna_uiTemplateAssetShelfPopover(uiLayout *layout,
   blender::ui::template_asset_shelf_popover(*layout, *C, asset_shelf_id, name ? name : "", icon);
 }
 
+static void rna_uiTemplateAssetCatalogImageBrowser(uiLayout *layout,
+                                                   bContext *C,
+                                                   PointerRNA *ptr,
+                                                   const char *propname,
+                                                   int rows,
+                                                   int cols,
+                                                   bool auto_convert)
+{
+  PropertyRNA *prop = RNA_struct_find_property(ptr, propname);
+
+  if (!prop) {
+    RNA_warning("property not found: %s.%s", RNA_struct_identifier(ptr->type), propname);
+    return;
+  }
+
+  uiTemplateAssetCatalogImageBrowser(layout, C, ptr, propname, rows, cols, auto_convert);
+}
+
 PointerRNA rna_uiTemplatePopupConfirm(uiLayout *layout,
                                       ReportList *reports,
                                       const char *opname,
@@ -2338,6 +2356,17 @@ void RNA_api_ui_layout(StructRNA *srna)
       srna, "template_shape_key_tree", "blender::ed::object::shapekey::template_tree");
   RNA_def_function_ui_description(func, "Shape Key tree view");
   RNA_def_function_flag(func, FUNC_USE_CONTEXT);
+
+  func = RNA_def_function(srna, "template_asset_catalog_image_browser", "rna_uiTemplateAssetCatalogImageBrowser");
+  RNA_def_function_ui_description(func, "Asset Catalog Image Browser with automatic image-to-asset conversion");
+  RNA_def_function_flag(func, FUNC_USE_CONTEXT);
+  parm = RNA_def_pointer(func, "data", "AnyType", "", "Data from which to take property");
+  RNA_def_parameter_flags(parm, PropertyFlag(0), PARM_REQUIRED | PARM_RNAPTR);
+  parm = RNA_def_string(func, "property", nullptr, 0, "", "Identifier of property in data");
+  RNA_def_parameter_flags(parm, PropertyFlag(0), PARM_REQUIRED);
+  RNA_def_int(func, "rows", 3, 1, 20, "Rows", "Number of rows in the image grid", 1, 10);
+  RNA_def_int(func, "cols", 4, 1, 20, "Columns", "Number of columns in the image grid", 1, 10);
+  RNA_def_boolean(func, "auto_convert", true, "Auto Convert", "Automatically convert images to assets");
 }
 
 #endif

@@ -2502,6 +2502,13 @@ void uiTemplateImageViews(uiLayout *layout, PointerRNA *imaptr);
 void uiTemplateImageFormatViews(uiLayout *layout, PointerRNA *imfptr, PointerRNA *ptr);
 void uiTemplateImageLayers(uiLayout *layout, bContext *C, Image *ima, ImageUser *iuser);
 void uiTemplateImageInfo(uiLayout *layout, bContext *C, Image *ima, ImageUser *iuser);
+void uiTemplateAssetCatalogImageBrowser(uiLayout *layout,
+                                       bContext *C,
+                                       PointerRNA *ptr,
+                                       const char *propname,
+                                       int rows,
+                                       int cols,
+                                       bool auto_convert);
 void uiTemplateRunningJobs(uiLayout *layout, bContext *C);
 void UI_but_func_operator_search(uiBut *but);
 void uiTemplateOperatorSearch(uiLayout *layout);

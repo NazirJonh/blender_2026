@@ -29,6 +29,7 @@
 #include "BLI_string.h"
 
 #include "ED_asset.hh"
+#include "ED_asset_image_utils.hh"
 #include "ED_screen.hh"
 /* XXX needs access to the file list, should all be done via the asset system in future. */
 #include "ED_fileselect.hh"
@@ -1518,6 +1519,57 @@ static void ASSET_OT_screenshot_preview(wmOperatorType *ot)
 
 /* -------------------------------------------------------------------- */
 
+static wmOperatorStatus images_to_assets_exec(bContext *C, wmOperator *op)
+{
+  Main *bmain = CTX_data_main(C);
+  if (!bmain) {
+    BKE_report(op->reports, RPT_ERROR, "No main database available");
+    return OPERATOR_CANCELLED;
+  }
+  
+  Vector<Image *> non_assets = get_non_asset_images(bmain);
+  
+  if (non_assets.is_empty()) {
+    BKE_report(op->reports, RPT_INFO, "No images available for conversion to assets");
+    return OPERATOR_FINISHED;
+  }
+  
+  int converted_count = 0;
+  for (Image *image : non_assets) {
+    if (ensure_image_is_asset(C, image)) {
+      converted_count++;
+    }
+  }
+  
+  BKE_reportf(op->reports, RPT_INFO, 
+              "Converted %d images to assets", converted_count);
+  
+  WM_main_add_notifier(NC_ASSET | NA_ADDED, nullptr);
+  return OPERATOR_FINISHED;
+}
+
+static bool images_to_assets_poll(bContext *C)
+{
+  Main *bmain = CTX_data_main(C);
+  if (!bmain) {
+    return false;
+  }
+  
+  /* Check if there are any images that can be converted */
+  Vector<Image *> non_assets = get_non_asset_images(bmain);
+  return !non_assets.is_empty();
+}
+
+static void ASSET_OT_images_to_assets(wmOperatorType *ot)
+{
+  ot->name = "Convert Images to Assets";
+  ot->description = "Convert all valid images in the current file to assets";
+  ot->idname = "ASSET_OT_images_to_assets";
+
+  ot->exec = images_to_assets_exec;
+  ot->poll = images_to_assets_poll;
+}
+
 void operatortypes_asset()
 {
   WM_operatortype_append(ASSET_OT_mark);
@@ -1536,6 +1588,7 @@ void operatortypes_asset()
   WM_operatortype_append(ASSET_OT_library_refresh);
 
   WM_operatortype_append(ASSET_OT_screenshot_preview);
+  WM_operatortype_append(ASSET_OT_images_to_assets);
 }
 
 }  // namespace blender::ed::asset

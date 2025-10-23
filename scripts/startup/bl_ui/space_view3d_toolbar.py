@@ -792,7 +792,7 @@ class VIEW3D_PT_tools_brush_texture(Panel, View3DPaintPanel):
         tex_slot = brush.texture_slot
 
         col = layout.column()
-        col.template_ID_preview(tex_slot, "texture", new="texture.new", rows=3, cols=8)
+        col.template_asset_catalog_image_browser(data=tex_slot, property="texture", rows=3, cols=8, auto_convert=True)
 
         brush_texture_settings(col, brush, context.sculpt_object)
 
@@ -818,7 +818,7 @@ class VIEW3D_PT_tools_mask_texture(Panel, View3DPaintPanel, TextureMaskPanel):
         col = layout.column()
         mask_tex_slot = brush.mask_texture_slot
 
-        col.template_ID_preview(mask_tex_slot, "texture", new="texture.new", rows=3, cols=8)
+        col.template_asset_catalog_image_browser(data=mask_tex_slot, property="texture", rows=3, cols=8, auto_convert=True)
 
         brush_mask_texture_settings(col, brush)
 

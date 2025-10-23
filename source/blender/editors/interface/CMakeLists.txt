@@ -55,6 +55,7 @@ set(SRC
   interface_string_search.cc
   interface_style.cc
   templates/interface_template_asset_shelf_popover.cc
+  templates/interface_template_asset_catalog_image_browser.cc
   templates/interface_template_attribute_search.cc
   templates/interface_template_bone_collection_tree.cc
   templates/interface_template_cache_file.cc
@@ -114,6 +115,7 @@ set(SRC
 
 set(LIB
   PRIVATE bf::asset_system
+  PRIVATE bf_editor_asset
   PRIVATE bf::blenfont
   PRIVATE bf::blenkernel
   PRIVATE bf::blenlib
