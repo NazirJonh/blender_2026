@@ -65,6 +65,8 @@
 #include "GEO_subdivide_curves.hh"
 #include "GEO_transform.hh"
 
+#include "curves_weight_paint_intern.hh"
+
 /**
  * The code below uses a suffix naming convention to indicate the coordinate space:
  * `cu`: Local space of the curves object that is being edited.
@@ -1867,6 +1869,9 @@ void operatortypes_curves()
   WM_operatortype_append(CURVES_OT_add_circle);
   WM_operatortype_append(CURVES_OT_add_bezier);
   WM_operatortype_append(CURVES_OT_handle_type_set);
+
+  /* Weight paint operators */
+  ED_operatortypes_curves_weight_paint();
 
   ED_operatortypes_curves_pen();
 }

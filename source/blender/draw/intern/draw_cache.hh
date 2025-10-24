@@ -159,4 +159,9 @@ gpu::Batch *DRW_cache_grease_pencil_weight_points_get(const Scene *scene, Object
 gpu::Batch *DRW_cache_grease_pencil_weight_lines_get(const Scene *scene, Object *ob);
 gpu::Batch *DRW_cache_grease_pencil_face_wireframe_get(const Scene *scene, Object *ob);
 
+/* Curves Weight Paint */
+
+gpu::Batch *DRW_cache_curves_weight_points_get(Object *ob);
+gpu::Batch *DRW_cache_curves_weight_lines_get(Object *ob);
+
 }  // namespace blender::draw

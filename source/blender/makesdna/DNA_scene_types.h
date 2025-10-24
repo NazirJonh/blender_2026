@@ -1369,6 +1369,21 @@ typedef struct CurvesSculpt {
   Paint paint;
 } CurvesSculpt;
 
+/** Curves weight paint. */
+typedef struct CurvesWeightPaint {
+  Paint paint;
+  
+  /* Weight Paint specific settings */
+  char flag;
+  char _pad[7];
+  
+  /* Auto normalize settings */
+  char auto_normalize;
+  char multipaint;
+  char lock_relative;
+  char _pad2[5];
+} CurvesWeightPaint;
+
 typedef struct UvSculpt {
   struct CurveMapping *curve_distance_falloff;
   int size;
@@ -1684,6 +1699,8 @@ typedef struct ToolSettings {
   GpWeightPaint *gp_weightpaint;
   /** Curves sculpt. */
   CurvesSculpt *curves_sculpt;
+  /** Curves weight paint. */
+  CurvesWeightPaint *curves_weight_paint;
 
   /** Vertex group weight - used only for editmode, not weight paint. */
   float vgroup_weight;

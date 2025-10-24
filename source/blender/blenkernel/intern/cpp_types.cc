@@ -35,6 +35,7 @@ BLI_CPP_TYPE_MAKE(Tex *, CPPTypeFlags::BasicType)
 BLI_CPP_TYPE_MAKE(Image *, CPPTypeFlags::BasicType)
 BLI_CPP_TYPE_MAKE(Material *, CPPTypeFlags::BasicType)
 
+BLI_CPP_TYPE_MAKE(MDeformVert, CPPTypeFlags::None);
 BLI_CPP_TYPE_MAKE(MStringProperty, CPPTypeFlags::None);
 BLI_CPP_TYPE_MAKE(blender::nodes::MenuValue,
                   CPPTypeFlags::Hashable | CPPTypeFlags::EqualityComparable);
@@ -64,6 +65,7 @@ void BKE_cpp_types_init()
   BLI_CPP_TYPE_REGISTER(Image *);
   BLI_CPP_TYPE_REGISTER(Material *);
 
+  BLI_CPP_TYPE_REGISTER(MDeformVert);
   BLI_CPP_TYPE_REGISTER(MStringProperty);
   BLI_CPP_TYPE_REGISTER(blender::nodes::MenuValue);
   BLI_CPP_TYPE_REGISTER(blender::nodes::BundlePtr);

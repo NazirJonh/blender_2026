@@ -362,6 +362,9 @@ bool BKE_paint_ensure_from_paintmode(Scene *sce, PaintMode mode)
     case PaintMode::SculptCurves:
       paint_ptr = (Paint **)&ts->curves_sculpt;
       break;
+    case PaintMode::WeightCurves:
+      paint_ptr = (Paint **)&ts->curves_weight_paint;
+      break;
     case PaintMode::Invalid:
       break;
   }
@@ -397,6 +400,8 @@ Paint *BKE_paint_get_active_from_paintmode(Scene *sce, PaintMode mode)
         return &ts->gp_weightpaint->paint;
       case PaintMode::SculptCurves:
         return &ts->curves_sculpt->paint;
+      case PaintMode::WeightCurves:
+        return &ts->curves_weight_paint->paint;
       case PaintMode::Invalid:
         return nullptr;
       default:
@@ -429,6 +434,8 @@ const EnumPropertyItem *BKE_paint_get_tool_enum_from_paintmode(const PaintMode m
       return rna_enum_brush_gpencil_weight_types_items;
     case PaintMode::SculptCurves:
       return rna_enum_brush_curves_sculpt_brush_type_items;
+    case PaintMode::WeightCurves:
+      return rna_enum_brush_weight_brush_type_items;
     case PaintMode::Invalid:
       break;
   }
@@ -583,6 +590,8 @@ PaintMode BKE_paintmode_get_from_tool(const bToolRef *tref)
         return PaintMode::WeightGPencil;
       case CTX_MODE_SCULPT_CURVES:
         return PaintMode::SculptCurves;
+      case CTX_MODE_WEIGHT_CURVES:
+        return PaintMode::WeightCurves;
       case CTX_MODE_PAINT_GREASE_PENCIL:
         return PaintMode::GPencil;
       case CTX_MODE_SCULPT_GREASE_PENCIL:
@@ -1018,6 +1027,9 @@ static void paint_brush_default_essentials_name_get(
         }
       }
       break;
+    case PaintMode::WeightCurves:
+      name = "Paint";
+      break;
     default:
       BLI_assert_unreachable();
       break;
@@ -1273,6 +1285,10 @@ static void paint_runtime_init(const ToolSettings *ts, Paint *paint)
     paint->runtime->ob_mode = OB_MODE_SCULPT_CURVES;
     paint->runtime->paint_mode = PaintMode::SculptCurves;
   }
+  else if (ts->curves_weight_paint && paint == &ts->curves_weight_paint->paint) {
+    paint->runtime->ob_mode = OB_MODE_WEIGHT_PAINT;
+    paint->runtime->paint_mode = PaintMode::WeightCurves;
+  }
   else {
     BLI_assert_unreachable();
   }
@@ -1302,6 +1318,8 @@ uint BKE_paint_get_brush_type_offset_from_paintmode(const PaintMode mode)
       return offsetof(Brush, gpencil_weight_brush_type);
     case PaintMode::SculptCurves:
       return offsetof(Brush, curves_sculpt_brush_type);
+    case PaintMode::WeightCurves:
+      return offsetof(Brush, weight_brush_type);
     case PaintMode::Invalid:
       break; /* We don't use these yet. */
   }
@@ -1755,6 +1773,7 @@ bool BKE_paint_ensure(ToolSettings *ts, Paint **r_paint)
                       (Paint *)ts->vpaint,
                       (Paint *)ts->wpaint,
                       (Paint *)ts->curves_sculpt,
+                      (Paint *)ts->curves_weight_paint,
                       (Paint *)&ts->imapaint));
 #ifndef NDEBUG
       Paint paint_test = blender::dna::shallow_copy(**r_paint);
@@ -1802,6 +1821,11 @@ bool BKE_paint_ensure(ToolSettings *ts, Paint **r_paint)
   }
   else if ((CurvesSculpt **)r_paint == &ts->curves_sculpt) {
     CurvesSculpt *data = MEM_callocN<CurvesSculpt>(__func__);
+    paint = &data->paint;
+    paint_init_data(*paint);
+  }
+  else if ((CurvesWeightPaint **)r_paint == &ts->curves_weight_paint) {
+    CurvesWeightPaint *data = MEM_callocN<CurvesWeightPaint>(__func__);
     paint = &data->paint;
     paint_init_data(*paint);
   }
