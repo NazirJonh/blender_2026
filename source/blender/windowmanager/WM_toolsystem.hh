@@ -139,6 +139,63 @@ void WM_toolsystem_ref_properties_init_for_keymap(bToolRef *tref,
                                                   PointerRNA *src_ptr,
                                                   wmOperatorType *ot);
 
+// ---- Added explicit-tool API (reading without activation) ----
+
+/**
+ * Get IDProperty group for a specific tool by tool_idname.
+ * 
+ * This function retrieves the IDProperty group associated with a specific tool
+ * without activating or modifying the tool. Useful for reading tool settings
+ * when the tool is not currently active.
+ */
+IDProperty *WM_toolsystem_ref_properties_get_tool_idprops(bToolRef *tref, const char *tool_idname);
+
+/**
+ * Ensure IDProperty group exists for a specific tool by tool_idname.
+ * 
+ * This function creates the IDProperty group if it doesn't exist, or returns
+ * the existing one. Use this when you need to modify tool properties.
+ */
+IDProperty *WM_toolsystem_ref_properties_ensure_tool_idprops(bToolRef *tref, const char *tool_idname);
+
+/**
+ * Get operator properties for a specific tool without activation.
+ * 
+ * Retrieves operator properties associated with a specific tool without
+ * activating the tool. This is useful for reading tool settings when
+ * the tool is not currently active.
+ */
+bool WM_toolsystem_ref_properties_get_for_tool_ex(bToolRef *tref,
+                                                  const char *tool_idname,
+                                                  const char *idname,
+                                                  StructRNA *type,
+                                                  PointerRNA *r_ptr);
+
+/**
+ * Ensure operator properties exist for a specific tool.
+ * 
+ * Creates operator properties for a specific tool if they don't exist,
+ * or returns the existing ones. Use this when you need to modify
+ * tool operator properties.
+ */
+void WM_toolsystem_ref_properties_ensure_for_tool_ex(bToolRef *tref,
+                                                     const char *tool_idname,
+                                                     const char *idname,
+                                                     StructRNA *type,
+                                                     PointerRNA *r_ptr);
+
+/**
+ * Convenience macro to get operator properties for a specific tool.
+ */
+#define WM_toolsystem_ref_properties_get_from_operator_for_tool(tref, tool_idname, ot, r_ptr) \
+  WM_toolsystem_ref_properties_get_for_tool_ex(tref, tool_idname, (ot)->idname, (ot)->srna, r_ptr)
+
+/**
+ * Convenience macro to ensure operator properties exist for a specific tool.
+ */
+#define WM_toolsystem_ref_properties_ensure_from_operator_for_tool(tref, tool_idname, ot, r_ptr) \
+  WM_toolsystem_ref_properties_ensure_for_tool_ex(tref, tool_idname, (ot)->idname, (ot)->srna, r_ptr)
+
 /**
  * Use to update the active tool (shown in the top bar) in the least disruptive way.
  *
