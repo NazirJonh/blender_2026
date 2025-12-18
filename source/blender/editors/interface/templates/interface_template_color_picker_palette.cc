@@ -23,6 +23,7 @@
 #include "BKE_context.hh"
 #include "BKE_paint.hh"
 #include "BKE_brush.hh"
+#include "BKE_report.hh"
 
 #include "RNA_access.hh"
 #include "RNA_prototypes.hh"
@@ -311,6 +312,45 @@ static void ui_colorpicker_palette_add_cb(bContext *C, void *but1, void *arg)
     return;
   }
   
+  /* If color not found yet, try to get it from paint context (for paint modes) */
+  if (!color_found) {
+    Paint *paint = BKE_paint_get_active_from_context(C);
+    if (paint) {
+      const Brush *brush = BKE_paint_brush_for_read(paint);
+      if (brush) {
+        const float *brush_color = BKE_brush_color_get(paint, brush);
+        if (brush_color) {
+          copy_v3_v3(color, brush_color);
+          color_found = true;
+          printf("[DEBUG] ui_colorpicker_palette_add_cb: got color from brush: %.3f, %.3f, %.3f\n",
+                 color[0], color[1], color[2]);
+        }
+      }
+    }
+  }
+  
+  /* Check if color already exists in palette */
+  if (color_found) {
+    LISTBASE_FOREACH (PaletteColor *, existing_color, &palette->colors) {
+      if (compare_v3v3(existing_color->color, color, 0.001f)) {
+        printf("[DEBUG] Color already exists in palette - not adding\n");
+        
+        /* Show user feedback */
+        wmWindowManager *wm = CTX_wm_manager(C);
+        if (wm) {
+          BKE_reportf(&wm->runtime->reports,
+                      RPT_WARNING,
+                      "Color (%.3f, %.3f, %.3f) already exists in palette",
+                      color[0],
+                      color[1],
+                      color[2]);
+          WM_report_banner_show(wm, CTX_wm_window(C));
+        }
+        return;
+      }
+    }
+  }
+  
   /* Add color to palette directly (bypassing operator for non-paint contexts) */
   PaletteColor *palcol = BKE_palette_color_add(palette);
   if (palcol) {
@@ -322,22 +362,6 @@ static void ui_colorpicker_palette_add_cb(bContext *C, void *but1, void *arg)
       palcol->value = 0.0f;
       printf("[DEBUG] ui_colorpicker_palette_add_cb: added color to palette: %.3f, %.3f, %.3f\n",
              palcol->color[0], palcol->color[1], palcol->color[2]);
-    }
-    else {
-      /* Fallback: try to get color from paint context (for paint modes) */
-      Paint *paint = BKE_paint_get_active_from_context(C);
-      if (paint) {
-        const Brush *brush = BKE_paint_brush_for_read(paint);
-        if (brush) {
-          const float *brush_color = BKE_brush_color_get(paint, brush);
-          if (brush_color) {
-            copy_v3_v3(palcol->color, brush_color);
-            palcol->value = 0.0f;
-            printf("[DEBUG] ui_colorpicker_palette_add_cb: set color from brush: %.3f, %.3f, %.3f\n",
-                   palcol->color[0], palcol->color[1], palcol->color[2]);
-          }
-        }
-      }
     }
   }
   

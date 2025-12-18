@@ -166,16 +166,30 @@ static bool palette_poll(bContext *C)
   return false;
 }
 
-static wmOperatorStatus palette_color_add_exec(bContext *C, wmOperator * /*op*/)
+static bool palette_color_exists(const Palette *palette, const float color[3], float tolerance = 0.001f)
+{
+  if (!palette) {
+    return false;
+  }
+
+  LISTBASE_FOREACH (const PaletteColor *, existing_color, &palette->colors) {
+    if (compare_v3v3(existing_color->color, color, tolerance)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+static wmOperatorStatus palette_color_add_exec(bContext *C, wmOperator *op)
 {
   Paint *paint = BKE_paint_get_active_from_context(C);
   PaintMode mode = BKE_paintmode_get_active_from_context(C);
   Palette *palette = paint->palette;
   PaletteColor *color;
 
-  color = BKE_palette_color_add(palette);
-  palette->active_color = BLI_listbase_count(&palette->colors) - 1;
-
+  /* Get the color we want to add */
+  float new_color[3] = {0.0f, 0.0f, 0.0f};
   const Brush *brush = BKE_paint_brush_for_read(paint);
   if (brush) {
     if (ELEM(mode,
@@ -186,7 +200,47 @@ static wmOperatorStatus palette_color_add_exec(bContext *C, wmOperator * /*op*/)
              PaintMode::GPencil,
              PaintMode::VertexGPencil))
     {
-      copy_v3_v3(color->color, BKE_brush_color_get(paint, brush));
+      copy_v3_v3(new_color, BKE_brush_color_get(paint, brush));
+    }
+    else if (mode == PaintMode::Weight) {
+      zero_v3(new_color);
+      /* For weight mode, we don't check duplicates based on color */
+    }
+  }
+
+  /* Check if color already exists in palette (only for color modes) */
+  if (ELEM(mode,
+           PaintMode::Texture3D,
+           PaintMode::Texture2D,
+           PaintMode::Vertex,
+           PaintMode::Sculpt,
+           PaintMode::GPencil,
+           PaintMode::VertexGPencil))
+  {
+    if (palette_color_exists(palette, new_color)) {
+      BKE_reportf(op->reports,
+                  RPT_WARNING,
+                  "Color (%.3f, %.3f, %.3f) already exists in palette",
+                  new_color[0],
+                  new_color[1],
+                  new_color[2]);
+      return OPERATOR_CANCELLED;
+    }
+  }
+
+  color = BKE_palette_color_add(palette);
+  palette->active_color = BLI_listbase_count(&palette->colors) - 1;
+
+  if (brush) {
+    if (ELEM(mode,
+             PaintMode::Texture3D,
+             PaintMode::Texture2D,
+             PaintMode::Vertex,
+             PaintMode::Sculpt,
+             PaintMode::GPencil,
+             PaintMode::VertexGPencil))
+    {
+      copy_v3_v3(color->color, new_color);
       color->value = 0.0;
     }
     else if (mode == PaintMode::Weight) {
