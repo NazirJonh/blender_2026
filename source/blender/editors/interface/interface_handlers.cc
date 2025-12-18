@@ -4494,7 +4494,9 @@ static void block_open_begin(bContext *C, Button *but, HandleButtonData *data)
   }
 
   if (func || handlefunc) {
-    data->menu = popup_block_create(C, data->region, but, func, handlefunc, arg, nullptr, false);
+    /* Enable refresh for color picker popup to support palette updates */
+    const bool can_refresh = (handlefunc == block_func_COLOR);
+    data->menu = popup_block_create(C, data->region, but, func, handlefunc, arg, nullptr, can_refresh);
     if (but->block->handle) {
       data->menu->popup = but->block->handle->popup;
     }

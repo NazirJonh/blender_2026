@@ -9174,6 +9174,60 @@ class VIEW3D_AST_brush_gpencil_weight(AssetShelfHiddenByDefault, View3DAssetShel
     brush_type_prop = "gpencil_weight_brush_type"
 
 
+# Enhanced Color Palette Context Menu
+class VIEW3D_MT_palette_context_menu(bpy.types.Menu):
+    """Context menu for color palette operations"""
+    bl_label = "Palette"
+    bl_idname = "VIEW3D_MT_palette_context_menu"
+
+    def draw(self, context):
+        layout = self.layout
+
+        # Add Color
+        layout.operator("palette.color_add", text="Add Color", icon='ADD')
+
+        # Remove Color
+        layout.operator("palette.color_delete", text="Remove Color", icon='REMOVE')
+
+        layout.separator()
+
+        # Move operations
+        op = layout.operator("palette.color_move", text="Move Up", icon='TRIA_UP')
+        op.type = 'UP'
+        op = layout.operator("palette.color_move", text="Move Down", icon='TRIA_DOWN')
+        op.type = 'DOWN'
+
+        layout.separator()
+
+        # Sort submenu
+        layout.menu("VIEW3D_MT_palette_sort", text="Sort", icon='SORTSIZE')
+
+        layout.separator()
+
+        # Palette operations
+        layout.operator("palette.new", text="New Palette", icon='FILE_NEW')
+
+
+class VIEW3D_MT_palette_sort(bpy.types.Menu):
+    """Submenu for palette sorting options"""
+    bl_label = "Sort Palette"
+
+    def draw(self, context):
+        layout = self.layout
+
+        op = layout.operator("palette.sort", text="By Hue")
+        op.type = 'HSV'
+        
+        op = layout.operator("palette.sort", text="By Saturation")
+        op.type = 'SVH'
+        
+        op = layout.operator("palette.sort", text="By Value")
+        op.type = 'VHS'
+        
+        op = layout.operator("palette.sort", text="By Luminance")
+        op.type = 'LUMINANCE'
+
+
 classes = (
     VIEW3D_HT_header,
     VIEW3D_HT_tool_header,
@@ -9443,6 +9497,8 @@ classes = (
     VIEW3D_PT_greasepencil_sculpt_context_menu,
     VIEW3D_PT_greasepencil_vertex_paint_context_menu,
     VIEW3D_PT_greasepencil_weight_context_menu,
+    VIEW3D_MT_palette_context_menu,
+    VIEW3D_MT_palette_sort,
 )
 
 

@@ -1994,6 +1994,13 @@ void RNA_api_ui_layout(StructRNA *srna)
   api_ui_item_rna_common(func);
   RNA_def_boolean(func, "color", false, "", "Display the colors as colors or values");
 
+  func = RNA_def_function(srna, "template_colorpicker_palette", "template_colorpicker_palette");
+  RNA_def_function_ui_description(
+      func,
+      "Enhanced color palette with collapsible header, visual indicators, and improved UX. "
+      "Features include: collapsible header, active color indicator, and size toggle.");
+  api_ui_item_rna_common(func);
+
   func = RNA_def_function(srna, "template_image_layers", "uiTemplateImageLayers");
   RNA_def_function_flag(func, FUNC_USE_CONTEXT);
   parm = RNA_def_pointer(func, "image", "Image", "", "");

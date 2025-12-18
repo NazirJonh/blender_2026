@@ -412,7 +412,12 @@ class ColorPalettePanel(BrushPanel):
 
         layout.template_ID(settings, "palette", new="palette.new")
         if settings.palette:
-            layout.template_palette(settings, "palette", color=True)
+            # Try to use enhanced color palette template with fallback
+            try:
+                layout.template_colorpicker_palette(settings, "palette")
+            except AttributeError:
+                # Fallback to standard template if enhanced version not available
+                layout.template_palette(settings, "palette", color=True)
 
 
 class ClonePanel(BrushPanel):

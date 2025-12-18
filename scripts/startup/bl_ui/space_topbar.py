@@ -858,6 +858,68 @@ class TOPBAR_PT_grease_pencil_layers(Panel):
         DATA_PT_grease_pencil_layers.draw_settings(layout, grease_pencil)
 
 
+# Enhanced Color Palette Rename Panel
+class TOPBAR_PT_palette_rename(Panel):
+    """Panel for renaming the active color palette"""
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'HEADER'
+    bl_label = "Rename Palette"
+    bl_ui_units_x = 14
+
+    @classmethod
+    def poll(cls, context):
+        """Check if there's an active palette to rename"""
+        # Check various paint modes for active palette
+        try:
+            mode = context.mode
+            ts = context.scene.tool_settings
+            
+            if mode == 'PAINT_TEXTURE' and ts.image_paint:
+                return ts.image_paint.palette is not None
+            elif mode == 'SCULPT' and ts.sculpt:
+                return ts.sculpt.palette is not None
+            elif mode == 'PAINT_VERTEX' and ts.vertex_paint:
+                return ts.vertex_paint.palette is not None
+            elif mode == 'PAINT_WEIGHT' and ts.weight_paint:
+                return ts.weight_paint.palette is not None
+        except AttributeError:
+            pass
+        
+        return False
+
+    def draw(self, context):
+        """Draw the palette rename UI"""
+        layout = self.layout
+
+        def row_with_icon(layout, icon):
+            row = layout.row()
+            row.activate_init = True
+            row.label(icon=icon)
+            return row
+
+        # Get active palette from current paint mode
+        palette = None
+        mode = context.mode
+        ts = context.scene.tool_settings
+        
+        if mode == 'PAINT_TEXTURE' and ts.image_paint:
+            palette = ts.image_paint.palette
+        elif mode == 'SCULPT' and ts.sculpt:
+            palette = ts.sculpt.palette
+        elif mode == 'PAINT_VERTEX' and ts.vertex_paint:
+            palette = ts.vertex_paint.palette
+        elif mode == 'PAINT_WEIGHT' and ts.weight_paint:
+            palette = ts.weight_paint.palette
+        
+        if palette:
+            layout.label(text="Palette Name")
+            row = row_with_icon(layout, 'COLOR')
+            row.prop(palette, "name", text="")
+        else:
+            row = row_with_icon(layout, 'ERROR')
+            row.label(text="No active palette")
+
+
 classes = (
     TOPBAR_HT_upper_bar,
     TOPBAR_MT_file_context_menu,
@@ -885,6 +947,7 @@ classes = (
     TOPBAR_PT_name,
     TOPBAR_PT_name_marker,
     TOPBAR_PT_grease_pencil_layers,
+    TOPBAR_PT_palette_rename,
 )
 
 if __name__ == "__main__":  # only for live edit.

@@ -2431,6 +2431,15 @@ void template_color_picker(Layout *layout,
                            bool lock_luminosity,
                            bool cubic);
 void template_palette(Layout *layout, PointerRNA *ptr, StringRefNull propname, bool colors);
+/**
+ * Enhanced color palette template with collapsible header, visual indicators, and improved UX.
+ * This is an enhanced version of template_palette with additional features like:
+ * - Collapsible header for space efficiency
+ * - Visual indicator for active color (triangle)
+ * - Size toggle for color swatches
+ * - Better integration with paint modes
+ */
+void template_colorpicker_palette(Layout *layout, PointerRNA *ptr, StringRefNull propname);
 void template_crypto_picker(Layout *layout, PointerRNA *ptr, StringRefNull propname, int icon);
 /**
  * TODO: for now, grouping of layers is determined by dividing up the length of
