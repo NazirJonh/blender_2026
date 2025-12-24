@@ -20,6 +20,7 @@ struct GPUVertFormat;
 struct GPUViewport;
 struct ID;
 struct Main;
+struct Mesh;
 struct Object;
 struct RegionView3D;
 struct Render;
@@ -168,6 +169,10 @@ void DRW_xr_drawing_end();
 
 /** For garbage collection. */
 void DRW_cache_free_old_batches(Main *bmain);
+
+/* Clear sculpt custom overlay batch flags from static map.
+ * Call when exiting sculpt mode to prevent stale entries. */
+void DRW_mesh_batch_cache_clear_sculpt_custom_flags(const Mesh &mesh, const Object *ob);
 
 namespace blender::draw {
 
