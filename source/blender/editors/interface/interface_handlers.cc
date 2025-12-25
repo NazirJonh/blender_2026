@@ -20,6 +20,8 @@
 #include "DNA_curveprofile_types.h"
 #include "DNA_scene_types.h"
 #include "DNA_screen_types.h"
+#include "DNA_space_enums.h"
+#include "DNA_space_types.h"
 
 #include "BLI_array.hh"
 #include "BLI_array_utils.h"
@@ -6598,6 +6600,111 @@ static void ui_palette_set_active(ButtonColor *color_but)
   }
 }
 
+/**
+ * Check if we're actually in a Paint mode by checking object mode or Image Editor paint mode.
+ */
+static bool ui_is_in_paint_mode(const bContext *C)
+{
+  Object *obact = CTX_data_active_object(C);
+  if (obact) {
+    int ob_mode = obact->mode;
+    if (ELEM(ob_mode,
+             OB_MODE_SCULPT,
+             OB_MODE_VERTEX_PAINT,
+             OB_MODE_WEIGHT_PAINT,
+             OB_MODE_TEXTURE_PAINT,
+             OB_MODE_PAINT_GREASE_PENCIL,
+             OB_MODE_VERTEX_GREASE_PENCIL,
+             OB_MODE_SCULPT_GREASE_PENCIL,
+             OB_MODE_WEIGHT_GREASE_PENCIL,
+             OB_MODE_SCULPT_CURVES))
+    {
+      return true;
+    }
+  }
+
+  /* Also check Image Editor in Paint mode (Texture2D paint) */
+  SpaceImage *sima = CTX_wm_space_image(C);
+  if (sima != nullptr && sima->mode == SI_MODE_PAINT) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Get color from palette button, converting to scene linear space.
+ * Returns true if color was successfully retrieved.
+ * Supports both RGB (3 components) and RGBA (4 components) based on button capabilities.
+ */
+static bool ui_palette_color_get_from_button(Button *but, float r_color[4])
+{
+  const bool has_alpha = button_color_has_alpha(but);
+  
+  if (but->rnaprop && RNA_property_subtype(but->rnaprop) == PROP_COLOR_GAMMA) {
+    const int array_len = has_alpha ? 4 : 3;
+    RNA_property_float_get_array_at_most(
+        &but->rnapoin, but->rnaprop, r_color, array_len);
+    IMB_colormanagement_srgb_to_scene_linear_v3(r_color, r_color);
+    if (!has_alpha) {
+      r_color[3] = 1.0f; /* Default alpha to 1.0 if not present */
+    }
+    return true;
+  }
+  if (but->rnaprop && RNA_property_subtype(but->rnaprop) == PROP_COLOR) {
+    const int array_len = has_alpha ? 4 : 3;
+    RNA_property_float_get_array_at_most(
+        &but->rnapoin, but->rnaprop, r_color, array_len);
+    if (!has_alpha) {
+      r_color[3] = 1.0f; /* Default alpha to 1.0 if not present */
+    }
+    return true;
+  }
+  /* Fallback: get color directly from button */
+  if (has_alpha) {
+    button_v4_get(but, r_color);
+  }
+  else {
+    button_v3_get(but, r_color);
+    r_color[3] = 1.0f; /* Default alpha to 1.0 if not present */
+  }
+  return true;
+}
+
+/**
+ * Update a color property from palette color.
+ * Handles both PROP_COLOR and PROP_COLOR_GAMMA with proper color space conversion.
+ * Supports both RGB (3 components) and RGBA (4 components) based on button capabilities.
+ */
+static void ui_color_property_update_from_palette(bContext *C,
+                                                  Button *from_but,
+                                                  const float palette_color[4])
+{
+  if (!from_but->rnaprop ||
+      !ELEM(RNA_property_subtype(from_but->rnaprop), PROP_COLOR, PROP_COLOR_GAMMA))
+  {
+    return;
+  }
+
+  const bool has_alpha = button_color_has_alpha(from_but);
+  const int array_len = has_alpha ? 4 : 3;
+
+  if (RNA_property_subtype(from_but->rnaprop) == PROP_COLOR_GAMMA) {
+    /* Convert to sRGB for gamma-corrected color */
+    float color_srgb[4];
+    copy_v4_v4(color_srgb, palette_color);
+    IMB_colormanagement_scene_linear_to_srgb_v3(color_srgb, color_srgb);
+    RNA_property_float_set_array_at_most(&from_but->rnapoin, from_but->rnaprop, color_srgb, array_len);
+  }
+  else {
+    /* Direct scene linear color */
+    RNA_property_float_set_array_at_most(
+        &from_but->rnapoin, from_but->rnaprop, palette_color, array_len);
+  }
+
+  RNA_property_update(C, &from_but->rnapoin, from_but->rnaprop);
+}
+
 static int ui_do_but_COLOR(bContext *C, Button *but, HandleButtonData *data, const wmEvent *event)
 {
   BLI_assert(but->type == ButtonType::Color);
@@ -6689,9 +6796,10 @@ static int ui_do_but_COLOR(bContext *C, Button *but, HandleButtonData *data, con
     if (event->type == LEFTMOUSE && event->val == KM_RELEASE) {
       if (color_but->is_pallete_color) {
         if ((event->modifier & KM_CTRL) == 0) {
-          float color[3];
           Paint *paint = BKE_paint_get_active_from_context(C);
-          if (paint != nullptr) {
+          bool is_in_paint_mode = ui_is_in_paint_mode(C);
+
+          if (paint != nullptr && is_in_paint_mode) {
             Brush *brush = BKE_paint_brush(paint);
 
             if (brush == nullptr) {
@@ -6699,39 +6807,59 @@ static int ui_do_but_COLOR(bContext *C, Button *but, HandleButtonData *data, con
             }
             else if (brush->flag & BRUSH_USE_GRADIENT) {
               float *target = &brush->gradient->data[brush->gradient->cur].r;
+              const bool has_alpha = button_color_has_alpha(but);
+              const int array_len = has_alpha ? 4 : 3;
 
               if (but->rnaprop && RNA_property_subtype(but->rnaprop) == PROP_COLOR_GAMMA) {
-                RNA_property_float_get_array_at_most(&but->rnapoin, but->rnaprop, target, 3);
+                RNA_property_float_get_array_at_most(&but->rnapoin, but->rnaprop, target, array_len);
                 IMB_colormanagement_srgb_to_scene_linear_v3(target, target);
               }
               else if (but->rnaprop && RNA_property_subtype(but->rnaprop) == PROP_COLOR) {
-                RNA_property_float_get_array_at_most(&but->rnapoin, but->rnaprop, target, 3);
+                RNA_property_float_get_array_at_most(&but->rnapoin, but->rnaprop, target, array_len);
               }
               BKE_brush_tag_unsaved_changes(brush);
             }
             else {
-              bool updated = false;
-
-              if (but->rnaprop && RNA_property_subtype(but->rnaprop) == PROP_COLOR_GAMMA) {
-                RNA_property_float_get_array_at_most(
-                    &but->rnapoin, but->rnaprop, color, ARRAY_SIZE(color));
-                IMB_colormanagement_srgb_to_scene_linear_v3(color, color);
-                BKE_brush_color_set(paint, brush, color);
-                updated = true;
-              }
-              else if (but->rnaprop && RNA_property_subtype(but->rnaprop) == PROP_COLOR) {
-                RNA_property_float_get_array_at_most(
-                    &but->rnapoin, but->rnaprop, color, ARRAY_SIZE(color));
-                BKE_brush_color_set(paint, brush, color);
-                updated = true;
+              /* Get color from palette button */
+              float palette_color[4];
+              if (!ui_palette_color_get_from_button(but, palette_color)) {
+                button_activate_state(C, but, BUTTON_STATE_EXIT);
+                return WM_UI_HANDLER_BREAK;
               }
 
-              if (updated) {
-                PropertyRNA *brush_color_prop;
+              PopupBlockHandle *popup = but->block->handle;
 
-                PointerRNA brush_ptr = RNA_id_pointer_create(&brush->id);
-                brush_color_prop = RNA_struct_find_property(&brush_ptr, "color");
-                RNA_property_update(C, &brush_ptr, brush_color_prop);
+              /* Check if we should update brush color - only if original button is Brush color */
+              if (popup && popup->popup_create_vars.but) {
+                Button *from_but = popup->popup_create_vars.but;
+
+                /* Check if from_but points to Brush struct */
+                if (from_but->rnapoin.type && RNA_struct_is_a(from_but->rnapoin.type, &RNA_Brush)) {
+                  /* Brush color only supports RGB (3 components), not RGBA */
+                  BKE_brush_color_set(paint, brush, palette_color);
+
+                  PropertyRNA *brush_color_prop;
+                  PointerRNA brush_ptr = RNA_id_pointer_create(&brush->id);
+                  brush_color_prop = RNA_struct_find_property(&brush_ptr, "color");
+                  RNA_property_update(C, &brush_ptr, brush_color_prop);
+                }
+              }
+
+              /* Always update the original button's PROP_COLOR if it exists */
+              if (popup && popup->popup_create_vars.but) {
+                ui_color_property_update_from_palette(C, popup->popup_create_vars.but, palette_color);
+              }
+            }
+          }
+          else {
+            /* No active paint context - update the original button's PROP_COLOR directly */
+            PopupBlockHandle *popup = but->block->handle;
+
+            if (popup && popup->popup_create_vars.but) {
+              /* Get color from palette button */
+              float palette_color[4];
+              if (ui_palette_color_get_from_button(but, palette_color)) {
+                ui_color_property_update_from_palette(C, popup->popup_create_vars.but, palette_color);
               }
             }
           }

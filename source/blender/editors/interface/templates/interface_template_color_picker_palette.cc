@@ -261,21 +261,22 @@ static void ui_colorpicker_palette_add_cb(bContext *C, void *but1, void *arg)
     Button *from_but = popup->popup_create_vars.but;
     float rgba[4] = {0.0f, 0.0f, 0.0f, 1.0f};
     
-    /* Use button_v4_get to get color - it handles all cases (RNA, editvec, etc.)
+    /* Use button_v4_get to get color with alpha - it handles all cases (RNA, editvec, etc.)
      * and returns color in scene linear space (which is what palette expects) */
     button_v4_get(from_but, rgba);
+    /* Extract RGB (alpha is not stored in PaletteColor, only RGB) */
     copy_v3_v3(color, rgba);
     color_found = true;
-    printf("[DEBUG] ui_colorpicker_palette_add_cb: got color from button: %.3f, %.3f, %.3f\n",
-           color[0], color[1], color[2]);
+    printf("[DEBUG] ui_colorpicker_palette_add_cb: got color from button: %.3f, %.3f, %.3f (alpha: %.3f)\n",
+           color[0], color[1], color[2], rgba[3]);
   }
   else if (popup) {
     /* Fallback: try retvec if button not available */
-    /* Use color from popup retvec (current color picker value) */
+    /* Use color from popup retvec (current color picker value) - retvec is 4 components */
     copy_v3_v3(color, popup->retvec);
     color_found = true;
-    printf("[DEBUG] ui_colorpicker_palette_add_cb: got color from popup->retvec: %.3f, %.3f, %.3f\n",
-           color[0], color[1], color[2]);
+    printf("[DEBUG] ui_colorpicker_palette_add_cb: got color from popup->retvec: %.3f, %.3f, %.3f (alpha: %.3f)\n",
+           color[0], color[1], color[2], popup->retvec[3]);
   }
   
   /* Fallback: try to get color from paint context (for paint modes) */
