@@ -81,24 +81,28 @@ void template_colorpicker_palette(Layout *layout, PointerRNA *ptr, const StringR
   
   printf("[DEBUG] template_colorpicker_palette: creating UI elements\n");
   
-  /* Collapsible header row */
+  /* Collapsible header row - full width button */
   Layout *header_col = &layout->column(true);
-  header_col->row(true);
+  header_col->row(false); /* Create row for full-width button */
   
   const int triangle_icon = palette_expanded ? ICON_TRIA_DOWN : ICON_TRIA_RIGHT;
+  const char *header_text = "Palette";
   printf("[DEBUG] template_colorpicker_palette: palette_expanded=%d, triangle_icon=%d\n", 
          palette_expanded, triangle_icon);
-  Button *header_but = uiDefIconBut(block,
-                                    ButtonType::But,
-                                    triangle_icon,
-                                    0,
-                                    0,
-                                    UI_UNIT_X,
-                                    UI_UNIT_Y,
-                                    nullptr,
-                                    0.0,
-                                    0.0,
-                                    "Click to expand/collapse palette");
+  
+  /* Get full width of layout for button */
+  const int full_width = layout->width();
+  
+  Button *header_but = uiDefIconTextBut(block,
+                                        ButtonType::But,
+                                        triangle_icon,
+                                        header_text,
+                                        0,
+                                        0,
+                                        short(full_width),
+                                        UI_UNIT_Y,
+                                        nullptr,
+                                        "Click to expand/collapse palette");
   
   button_func_set(header_but, ui_colorpicker_palette_expand_collapse_cb, header_but, block);
   
