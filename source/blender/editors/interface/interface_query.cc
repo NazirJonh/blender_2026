@@ -679,7 +679,9 @@ bool block_is_pie_menu(const Block *block)
 
 bool block_is_popup_any(const Block *block)
 {
-  return (block_is_menu(block) || block_is_popover(block) || block_is_pie_menu(block));
+  return (block_is_menu(block) || block_is_popover(block) || block_is_pie_menu(block) ||
+          /* Color picker popup has BLOCK_LOOP | BLOCK_KEEP_OPEN */
+          ((block->flag & BLOCK_LOOP) != 0));
 }
 
 static const Button *ui_but_next_non_separator(const Button *but)

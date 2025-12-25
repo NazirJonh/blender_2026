@@ -132,6 +132,7 @@ static void ui_popup_block_position(wmWindow *window,
   /* `block->rect` is already scaled with `butregion->winrct`,
    * apply this scale to layout panels too. */
   if (Panel *panel = block->panel) {
+    printf("[DEBUG] ui_popup_block_position: Scaling layout panels by aspect %.2f\n", block->aspect);
     for (LayoutPanelBody &body : panel->runtime->layout_panels.bodies) {
       body.start_y /= block->aspect;
       body.end_y /= block->aspect;
@@ -620,6 +621,8 @@ void popup_dummy_panel_set(ARegion *region, Block *block)
     }();
     panel = BKE_panel_new(&panel_type);
   }
+  panel->ofsx = 0;
+  panel->ofsy = 0;
   panel->runtime->layout_panels.clear();
   block->panel = panel;
   panel->runtime->block = block;
@@ -817,6 +820,49 @@ Block *popup_block_refresh(bContext *C, PopupBlockHandle *handle, ARegion *butre
     region->winrct.ymax = block->rect.ymax + UI_POPUP_MENU_TOP;
 
     block_translate(block, -region->winrct.xmin, -region->winrct.ymin);
+    /* Recalculate layout panel header coordinates from actual button positions after all transformations.
+     * Layout panel coordinates are calculated relative to block->rect.ymax, which changes during
+     * popup transformations. We recalculate coordinates from actual button positions here.
+     * Header buttons are identified by the BUT2_IS_PANEL_HEADER flag, using order for matching headers with buttons. */
+    if (block->panel) {
+      const float offset = style_get_dpi()->panelspace;
+      
+      /* Collect all header buttons from all blocks in the region.
+       * Header buttons are identified by the BUT2_IS_PANEL_HEADER flag. */
+      Vector<Button *> header_buttons;
+      LISTBASE_FOREACH (Block *, region_block, &region->runtime->uiblocks) {
+        for (const std::unique_ptr<Button> &bt : region_block->buttons) {
+          if (bt->flag2 & BUT2_IS_PANEL_HEADER) {
+            header_buttons.append(bt.get());
+          }
+        }
+      }
+      
+      printf("[DEBUG] popup_block_refresh: Found %zu header buttons with BUT2_IS_PANEL_HEADER flag for %zu headers\n",
+             header_buttons.size(), block->panel->runtime->layout_panels.headers.size());
+      
+      /* Match headers with buttons by order and recalculate coordinates */
+      const size_t num_headers = block->panel->runtime->layout_panels.headers.size();
+      for (size_t i = 0; i < num_headers && i < header_buttons.size(); i++) {
+        LayoutPanelHeader &header = block->panel->runtime->layout_panels.headers[i];
+        Button *but = header_buttons[i];
+        
+        const float old_start_y = header.start_y;
+        const float old_end_y = header.end_y;
+        
+        /* Recalculate coordinates from actual button position relative to block->rect.ymax */
+        header.start_y = float(but->rect.ymin - block->rect.ymax - offset);
+        header.end_y = float(but->rect.ymax - block->rect.ymax - offset);
+        
+        printf("[DEBUG] popup_block_refresh: Header %zu: [%.1f, %.1f] -> [%.1f, %.1f] from button ymin=%.1f, ymax=%.1f, block->rect.ymax=%.1f\n",
+               i, old_start_y, old_end_y, header.start_y, header.end_y, but->rect.ymin, but->rect.ymax, block->rect.ymax);
+      }
+      
+      if (header_buttons.size() < num_headers) {
+        printf("[DEBUG] popup_block_refresh: WARNING: Found only %zu header buttons for %zu headers!\n",
+               header_buttons.size(), num_headers);
+      }
+    }
     /* Popups can change size, fix scroll offset if a panel was closed. */
     float ymin = FLT_MAX;
     float ymax = -FLT_MAX;
@@ -993,6 +1039,7 @@ void popup_block_free(bContext *C, PopupBlockHandle *handle)
 
   if (handle->region->runtime->popup_block_panel) {
     BKE_panel_free(handle->region->runtime->popup_block_panel);
+    handle->region->runtime->popup_block_panel = nullptr;
   }
 
   ui_popup_block_remove(C, handle);

@@ -272,6 +272,9 @@ enum {
    * buttons currently.
    */
   BUT2_FORCE_SEMI_MODAL_ACTIVE = 1 << 1,
+  /** Button is part of a layout panel header. Used to identify panel header buttons
+   * for coordinate recalculation in popups. */
+  BUT2_IS_PANEL_HEADER = 1 << 2,
 };
 
 /** #Button.dragflag */

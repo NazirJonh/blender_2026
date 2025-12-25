@@ -4496,11 +4496,16 @@ static void block_open_begin(bContext *C, Button *but, HandleButtonData *data)
   }
 
   if (func || handlefunc) {
-    /* Enable refresh for color picker popup to support palette updates */
     const bool can_refresh = (handlefunc == block_func_COLOR);
-    data->menu = popup_block_create(C, data->region, but, func, handlefunc, arg, nullptr, can_refresh);
+    data->menu = popup_block_create(
+        C, data->region, but, func, handlefunc, arg, nullptr, can_refresh);
     if (but->block->handle) {
       data->menu->popup = but->block->handle->popup;
+    }
+    wmWindow *window = CTX_wm_window(C);
+    if (window && window->runtime && data->menu) {
+      popup_handlers_add(C, &window->runtime->modalhandlers, data->menu, 0);
+      WM_event_add_mousemove(window);
     }
   }
   else if (menufunc) {
@@ -4549,6 +4554,9 @@ static void block_open_end(bContext *C, Button *but, HandleButtonData *data)
   ED_workspace_status_text(C, nullptr);
 
   if (data->menu) {
+    if (data->window && data->window->runtime) {
+      popup_handlers_remove(&data->window->runtime->modalhandlers, data->menu);
+    }
     popup_block_free(C, data->menu);
     data->menu = nullptr;
   }
@@ -11977,6 +11985,9 @@ static int ui_handle_menus_recursive(bContext *C,
   }
   else if (!but && event->val == KM_PRESS && event->type == LEFTMOUSE) {
     LISTBASE_FOREACH (Block *, block, &menu->region->runtime->uiblocks) {
+      if (!block_is_popup_any(block)) {
+        continue;
+      }
       if (block->panel) {
         int mx = event->xy[0];
         int my = event->xy[1];
@@ -12355,8 +12366,15 @@ static int ui_popup_handler(bContext *C, const wmEvent *event, void *userdata)
   int retval = WM_UI_HANDLER_BREAK;
   bool reset_pie = false;
 
+  if (menu == nullptr || menu->region == nullptr || menu->region->runtime == nullptr) {
+    return WM_UI_HANDLER_BREAK;
+  }
+
+  ARegion *region = menu->region;
+  blender::bke::ARegionRuntime *region_runtime = region->runtime;
+
   ARegion *region_popup = CTX_wm_region_popup(C);
-  CTX_wm_region_popup_set(C, menu->region);
+  CTX_wm_region_popup_set(C, region);
 
   if (event->type == EVT_DROP || event->val == KM_DBL_CLICK) {
     /* EVT_DROP:
@@ -12371,17 +12389,139 @@ static int ui_popup_handler(bContext *C, const wmEvent *event, void *userdata)
     retval = WM_UI_HANDLER_CONTINUE;
   }
 
-  ui_handle_menus_recursive(C, event, menu, 0, false, false, true);
+  bool layout_panel_clicked = false;
+
+  if (event->val == KM_PRESS && event->type == LEFTMOUSE && region_runtime &&
+      !BLI_listbase_is_empty(&region_runtime->uiblocks))
+  {
+    printf("[DEBUG] ui_popup_handler: Processing %d blocks for popup event at mouse (%d, %d)\n",
+           BLI_listbase_count(&region_runtime->uiblocks), event->xy[0], event->xy[1]);
+
+    // First, list all blocks for debugging
+    LISTBASE_FOREACH (Block *, block, &region_runtime->uiblocks) {
+      if (!block) {
+        printf("[DEBUG] ui_popup_handler: Skipping null block\n");
+        continue;
+      }
+
+      printf("[DEBUG] ui_popup_handler: Block %p (flag=0x%x, rect=[%.1f,%.1f,%.1f,%.1f])",
+             block, block->flag, block->rect.xmin, block->rect.ymin, block->rect.xmax, block->rect.ymax);
+
+      if (block->panel == nullptr) {
+        printf(" has no panel\n");
+      } else {
+        printf(" has panel %p (type=%s, layout_panels=%zu)\n",
+               block->panel,
+               block->panel->type ? block->panel->type->idname : "null",
+               block->panel->runtime ? block->panel->runtime->layout_panels.headers.size() : 0);
+      }
+    }
+
+    LayoutPanelHeader *header = nullptr;
+
+    // Check if region has a popup_block_panel (used for layout panels in popups)
+    Panel *popup_panel = region_runtime->popup_block_panel;
+    printf("[DEBUG] ui_popup_handler: popup_block_panel = %p\n", popup_panel);
+    if (popup_panel) {
+      printf("[DEBUG] ui_popup_handler: popup_panel->runtime = %p\n", popup_panel->runtime);
+      if (popup_panel->runtime) {
+        printf("[DEBUG] ui_popup_handler: popup_panel headers count = %zu\n",
+               popup_panel->runtime->layout_panels.headers.size());
+      }
+    }
+    if (popup_panel && popup_panel->runtime &&
+        popup_panel->runtime->layout_panels.headers.size() > 0) {
+      printf("[DEBUG] ui_popup_handler: Found popup_block_panel %p with %zu headers\n",
+             popup_panel, popup_panel->runtime->layout_panels.headers.size());
+
+      // Find the block that uses this panel
+      Block *panel_block = nullptr;
+      LISTBASE_FOREACH (Block *, search_block, &region_runtime->uiblocks) {
+        if (search_block && search_block->panel == popup_panel) {
+          panel_block = search_block;
+          break;
+        }
+      }
+
+      if (!panel_block && !BLI_listbase_is_empty(&region_runtime->uiblocks)) {
+        // If panel is not assigned to a block, use the first block
+        panel_block = static_cast<Block *>(region_runtime->uiblocks.first);
+        printf("[DEBUG] ui_popup_handler: Panel not assigned to block, using first block %p\n", panel_block);
+      }
+
+      if (panel_block) {
+        /* Coordinates for `layout_panel_header_under_mouse` must be in the same space as
+         * `block->rect`, which for popups is window space. */
+        const int search_my_window = event->xy[1];
+
+        printf("[DEBUG] ui_popup_handler: Checking popup_block_panel, block %p\n", panel_block);
+        printf("[DEBUG] ui_popup_handler: Window Y %d, Block rect ymax %.1f\n",
+               search_my_window, panel_block->rect.ymax);
+
+        /* Check if mouse is in this block's rect (rect is in window space). */
+        if (IN_RANGE(float(event->xy[0]), panel_block->rect.xmin, panel_block->rect.xmax) &&
+            IN_RANGE(float(event->xy[1]), panel_block->rect.ymin, panel_block->rect.ymax)) {
+          printf("[DEBUG] ui_popup_handler: Mouse is in block %p, checking for header\n", panel_block);
+          header = layout_panel_header_under_mouse(*popup_panel, search_my_window);
+          if (header) {
+            printf("[DEBUG] ui_popup_handler: Found header in popup_block_panel!\n");
+          }
+        }
+      }
+    }
+
+    /* Also search blocks directly (fallback) */
+    if (!header) {
+      printf("[DEBUG] ui_popup_handler: Searching for blocks with layout panels...\n");
+      LISTBASE_FOREACH (Block *, search_block, &region_runtime->uiblocks) {
+        if (!search_block || !search_block->panel || !search_block->panel->runtime) {
+          continue;
+        }
+
+        if (search_block->panel->runtime->layout_panels.headers.size() > 0) {
+          const int search_my_window = event->xy[1];
+
+          /* Check if mouse is in this block's rect (rect is in window space). */
+          if (IN_RANGE(float(event->xy[0]), search_block->rect.xmin, search_block->rect.xmax) &&
+              IN_RANGE(float(event->xy[1]), search_block->rect.ymin, search_block->rect.ymax)) {
+            header = layout_panel_header_under_mouse(*search_block->panel, search_my_window);
+            if (header) {
+              printf("[DEBUG] ui_popup_handler: Found header in block %p!\n", search_block);
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    if (header) {
+      printf("[DEBUG] ui_popup_handler: Found layout panel header! Toggling panel state\n");
+      ED_region_tag_redraw(menu->region);
+      ED_region_tag_refresh_ui(menu->region);
+      ARegion *prev_region_popup = CTX_wm_region_popup(C);
+      CTX_wm_region_popup_set(C, menu->region);
+      panel_drag_collapse_handler_add(C, !ui_layout_panel_toggle_open(C, header));
+      CTX_wm_region_popup_set(C, prev_region_popup);
+      retval = WM_UI_HANDLER_BREAK;
+      layout_panel_clicked = true;
+    } else {
+      printf("[DEBUG] ui_popup_handler: No layout panel header found under mouse\n");
+    }
+  }
+
+  if (!layout_panel_clicked) {
+    ui_handle_menus_recursive(C, event, menu, 0, false, false, true);
+  }
 
   /* free if done, does not free handle itself */
   if (menu->menuretval) {
     wmWindow *win = CTX_wm_window(C);
     /* copy values, we have to free first (closes region) */
     const PopupBlockHandle temp = *menu;
-    Block *block = static_cast<Block *>(menu->region->runtime->uiblocks.first);
+    Block *block = region_runtime ? static_cast<Block *>(region_runtime->uiblocks.first) : nullptr;
 
     /* set last pie event to allow chained pie spawning */
-    if (block->flag & BLOCK_PIE_MENU) {
+    if (block && block->flag & BLOCK_PIE_MENU) {
       win->pie_event_type_last = block->pie_data.event_type;
       reset_pie = true;
     }
@@ -12415,7 +12555,7 @@ static int ui_popup_handler(bContext *C, const wmEvent *event, void *userdata)
     if (event->type == MOUSEMOVE &&
         (event->xy[0] != event->prev_xy[0] || event->xy[1] != event->prev_xy[1]))
     {
-      ui_blocks_set_tooltips(menu->region, true);
+      ui_blocks_set_tooltips(region, true);
     }
   }
 
@@ -12464,35 +12604,60 @@ void region_handlers_add(ListBase *handlers)
 
 void popup_handlers_add(bContext *C, ListBase *handlers, PopupBlockHandle *popup, const char flag)
 {
+  /* Ensure we never keep multiple handlers for the same popup handle (avoids stale pointers). */
+  WM_event_remove_ui_handler(handlers, ui_popup_handler, ui_popup_handler_remove, popup, false);
   WM_event_add_ui_handler(
       C, handlers, ui_popup_handler, ui_popup_handler_remove, popup, eWM_EventHandlerFlag(flag));
 }
 
 void popup_handlers_remove(ListBase *handlers, PopupBlockHandle *popup)
 {
+  wmEventHandler_UI *handler_first = nullptr;
   LISTBASE_FOREACH (wmEventHandler *, handler_base, handlers) {
-    if (handler_base->type == WM_HANDLER_TYPE_UI) {
-      wmEventHandler_UI *handler = (wmEventHandler_UI *)handler_base;
-
-      if (handler->handle_fn == ui_popup_handler &&
-          handler->remove_fn == ui_popup_handler_remove && handler->user_data == popup)
-      {
-        /* tag refresh parent popup */
-        wmEventHandler_UI *handler_next = (wmEventHandler_UI *)handler->head.next;
-        if (handler_next && handler_next->head.type == WM_HANDLER_TYPE_UI &&
-            handler_next->handle_fn == ui_popup_handler &&
-            handler_next->remove_fn == ui_popup_handler_remove)
-        {
-          PopupBlockHandle *parent_popup = static_cast<PopupBlockHandle *>(
-              handler_next->user_data);
-          ED_region_tag_refresh_ui(parent_popup->region);
-        }
-        break;
-      }
+    if (handler_base->type != WM_HANDLER_TYPE_UI) {
+      continue;
+    }
+    wmEventHandler_UI *handler = (wmEventHandler_UI *)handler_base;
+    if (handler->handle_fn == ui_popup_handler && handler->remove_fn == ui_popup_handler_remove &&
+        handler->user_data == popup)
+    {
+      handler_first = handler;
+      break;
     }
   }
 
-  WM_event_remove_ui_handler(handlers, ui_popup_handler, ui_popup_handler_remove, popup, false);
+  if (handler_first) {
+    wmEventHandler *next_base = handler_first->head.next;
+    while (next_base) {
+      if (next_base->type == WM_HANDLER_TYPE_UI) {
+        wmEventHandler_UI *handler_next = (wmEventHandler_UI *)next_base;
+        if (handler_next->handle_fn == ui_popup_handler &&
+            handler_next->remove_fn == ui_popup_handler_remove &&
+            handler_next->user_data != popup)
+        {
+          PopupBlockHandle *parent_popup = static_cast<PopupBlockHandle *>(handler_next->user_data);
+          if (parent_popup && parent_popup->region) {
+            ED_region_tag_refresh_ui(parent_popup->region);
+          }
+          break;
+        }
+      }
+      next_base = next_base->next;
+    }
+  }
+
+  LISTBASE_FOREACH_MUTABLE (wmEventHandler *, handler_base, handlers) {
+    if (handler_base->type != WM_HANDLER_TYPE_UI) {
+      continue;
+    }
+    wmEventHandler_UI *handler = (wmEventHandler_UI *)handler_base;
+    if (handler->handle_fn == ui_popup_handler && handler->remove_fn == ui_popup_handler_remove &&
+        handler->user_data == popup)
+    {
+      BLI_remlink(handlers, handler);
+      wm_event_free_handler(&handler->head);
+    }
+  }
 }
 
 void popup_handlers_remove_all(bContext *C, ListBase *handlers)

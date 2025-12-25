@@ -29,6 +29,7 @@
 #include "BKE_context.hh"
 #include "BKE_paint.hh"
 #include "BKE_paint_types.hh"
+#include "BKE_screen.hh"
 
 #include "UI_interface_c.hh"
 #include "UI_interface_layout.hh"
@@ -48,6 +49,29 @@
 #include "interface_intern.hh"
 
 namespace blender::ui {
+
+static void local_layout_panel_adjust_y(Panel *panel, const float dy)
+{
+  if (!panel || dy == 0.0f || !panel->runtime) {
+    return;
+  }
+  printf("[DEBUG] local_layout_panel_adjust_y: Adjusting panels by %.1f (dy=%.1f)\n", -dy, dy);
+  printf("[DEBUG] local_layout_panel_adjust_y: Before - headers=%zu, bodies=%zu\n",
+         panel->runtime->layout_panels.headers.size(),
+         panel->runtime->layout_panels.bodies.size());
+  for (LayoutPanelBody &body : panel->runtime->layout_panels.bodies) {
+    printf("[DEBUG] local_layout_panel_adjust_y: Body [%.1f, %.1f] -> ", body.start_y, body.end_y);
+    body.start_y -= dy;
+    body.end_y -= dy;
+    printf("[%.1f, %.1f]\n", body.start_y, body.end_y);
+  }
+  for (LayoutPanelHeader &header : panel->runtime->layout_panels.headers) {
+    printf("[DEBUG] local_layout_panel_adjust_y: Header [%.1f, %.1f] -> ", header.start_y, header.end_y);
+    header.start_y -= dy;
+    header.end_y -= dy;
+    printf("[%.1f, %.1f]\n", header.start_y, header.end_y);
+  }
+}
 
 enum ePickerType {
   PICKER_TYPE_RGB = 0,
@@ -1038,9 +1062,7 @@ static void block_colorpicker(bContext *C,
   }
 
   /* Add palette section */
-  printf("[DEBUG] block_colorpicker: calling ui_colorpicker_palette, yco=%d\n", yco);
   ui_colorpicker_palette(block, cpicker, from_but, picker_width, &yco, C);
-  printf("[DEBUG] block_colorpicker: ui_colorpicker_palette returned, yco=%d\n", yco);
 
   ui_colorpicker_hide_reveal(block);
 }
@@ -1053,29 +1075,19 @@ static void ui_colorpicker_palette(Block *block,
                                    int *yco_ptr,
                                    bContext *C)
 {
-  printf("[DEBUG] ui_colorpicker_palette: called\n");
-  
   if (!C || !block || !yco_ptr) {
-    printf("[DEBUG] ui_colorpicker_palette: early return - C=%p, block=%p, yco_ptr=%p\n", 
-           (void *)C, (void *)block, (void *)yco_ptr);
     return;
   }
-
-  printf("[DEBUG] ui_colorpicker_palette: picker_width=%d, yco=%d\n", picker_width, *yco_ptr);
 
   /* Get paint settings from active paint mode */
   Paint *paint = BKE_paint_get_active_from_context(C);
   if (!paint) {
-    printf("[DEBUG] ui_colorpicker_palette: no active paint context\n");
     return;
   }
-
-  printf("[DEBUG] ui_colorpicker_palette: paint=%p\n", (void *)paint);
 
   Palette *palette = paint->palette;
   
   /* Create layout for palette */
-  printf("[DEBUG] ui_colorpicker_palette: creating layout at yco=%d\n", *yco_ptr);
   const uiStyle *style = style_get_dpi();
   Layout &layout = block_layout(block,
                                 LayoutDirection::Vertical,
@@ -1087,12 +1099,9 @@ static void ui_colorpicker_palette(Block *block,
                                 0,
                                 style);
   block_layout_set_current(block, &layout);
-  printf("[DEBUG] ui_colorpicker_palette: layout created at %p\n", (void *)&layout);
 
   /* If no palette, show button to create one */
   if (!palette) {
-    printf("[DEBUG] ui_colorpicker_palette: no palette in paint context, showing create button\n");
-    
     Layout *row = &layout.row(false);
     Block *row_block = row->block();
     Button *create_but = uiDefIconTextButO(row_block,
@@ -1107,88 +1116,60 @@ static void ui_colorpicker_palette(Block *block,
                                           short(UI_UNIT_Y),
                                           std::nullopt);
     button_flag_disable(create_but, BUT_UNDO);
-    
-    /* Add callback to refresh popup after palette creation */
-    /* Note: Operator will handle palette creation, but we need to refresh the popup */
-    button_func_set(create_but, [](bContext &C) {
-      printf("[DEBUG] ui_colorpicker_palette: create palette button clicked\n");
-      /* The operator will create the palette, and Blender's notification system
-       * should update the UI. For popup, we may need explicit update. */
-    });
-    
+
     /* Resolve layout */
     int2 resolved_size = block_layout_resolve(block);
-    printf("[DEBUG] ui_colorpicker_palette: layout resolved (no palette), size=(%d, %d)\n", 
-           resolved_size.x, resolved_size.y);
+
     if (resolved_size.y > 0) {
       *yco_ptr -= resolved_size.y;
     }
-    printf("[DEBUG] ui_colorpicker_palette: completed (no palette, showing create button)\n");
     return;
   }
-
-  printf("[DEBUG] ui_colorpicker_palette: palette=%p (name='%s'), colors=%d\n", 
-         (void *)palette, palette->id.name + 2, BLI_listbase_count(&palette->colors));
 
   /* Create RNA pointer for paint settings */
   Scene *scene = CTX_data_scene(C);
   ToolSettings *tool_settings = CTX_data_tool_settings(C);
   if (!scene || !tool_settings) {
-    printf("[DEBUG] ui_colorpicker_palette: no scene or tool_settings - scene=%p, tool_settings=%p\n",
-           (void *)scene, (void *)tool_settings);
     return;
   }
 
   PointerRNA paint_ptr;
   PaintMode mode = BKE_paintmode_get_active_from_context(C);
-  printf("[DEBUG] ui_colorpicker_palette: paint mode=%d\n", int(mode));
   
   switch (mode) {
     case PaintMode::Sculpt:
       if (tool_settings->sculpt) {
         paint_ptr = RNA_pointer_create_discrete(&scene->id, &RNA_Sculpt, (void *)tool_settings->sculpt);
-        printf("[DEBUG] ui_colorpicker_palette: created RNA_Sculpt pointer\n");
       } else {
-        printf("[DEBUG] ui_colorpicker_palette: no sculpt settings\n");
         return;
       }
       break;
     case PaintMode::Vertex:
       if (tool_settings->vpaint) {
         paint_ptr = RNA_pointer_create_discrete(&scene->id, &RNA_VertexPaint, (void *)tool_settings->vpaint);
-        printf("[DEBUG] ui_colorpicker_palette: created RNA_VertexPaint pointer\n");
       } else {
-        printf("[DEBUG] ui_colorpicker_palette: no vpaint settings\n");
         return;
       }
       break;
     case PaintMode::Texture2D:
     case PaintMode::Texture3D:
       paint_ptr = RNA_pointer_create_discrete(&scene->id, &RNA_ImagePaint, (void *)&tool_settings->imapaint.paint);
-      printf("[DEBUG] ui_colorpicker_palette: created RNA_ImagePaint pointer\n");
       break;
     default:
       /* Weight paint and other modes don't use color palettes */
-      printf("[DEBUG] ui_colorpicker_palette: unsupported paint mode %d\n", int(mode));
       return;
   }
 
-  printf("[DEBUG] ui_colorpicker_palette: calling template_colorpicker_palette\n");
   /* Use our enhanced template */
   template_colorpicker_palette(&layout, &paint_ptr, "palette");
-  printf("[DEBUG] ui_colorpicker_palette: template_colorpicker_palette returned\n");
 
   /* Resolve layout - this will calculate the final size and position */
   int2 resolved_size = block_layout_resolve(block);
-  printf("[DEBUG] ui_colorpicker_palette: layout resolved, size=(%d, %d)\n", resolved_size.x, resolved_size.y);
   
   /* Update yco to position next elements below the palette */
   if (resolved_size.y > 0) {
     *yco_ptr -= resolved_size.y;
-    printf("[DEBUG] ui_colorpicker_palette: updated yco to %d\n", *yco_ptr);
   }
-  
-  printf("[DEBUG] ui_colorpicker_palette: completed successfully\n");
 }
 
 static int ui_colorpicker_wheel_cb(const bContext * /*C*/, Block *block, const wmEvent *event)
@@ -1270,6 +1251,9 @@ Block *block_func_COLOR(bContext *C, PopupBlockHandle *handle, void *arg_but)
   }
 
   copy_v3_v3(handle->retvec, but->editvec);
+
+  /* Set dummy panel for layout panels support in popup (required before creating layout) */
+  popup_dummy_panel_set(handle->region, block);
 
   block_colorpicker(C, block, but, handle->retvec, true);
 

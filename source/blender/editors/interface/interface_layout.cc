@@ -3967,6 +3967,10 @@ void LayoutItemPanelHeader::resolve_impl()
   y_ -= size.y;
   ui_item_position(item, x_, y_, w_, size.y);
   const float offset = style_get_dpi()->panelspace;
+  
+  /* Note: We don't search for buttons here because their coordinates are not yet set.
+   * Instead, we'll find them after all transformations in popup_block_refresh by their type
+   * (Label with ICON_RIGHTARROW or ICON_DOWNARROW_HLT) and use order for matching. */
   panel->runtime->layout_panels.headers.append(
       {float(y_) - offset, float(y_ + h_) - offset, open_prop_owner, open_prop_name});
 }
@@ -4736,7 +4740,12 @@ PanelLayout Layout::panel_prop(const bContext *C,
     Block *block = row->block();
     const int icon = is_open ? ICON_DOWNARROW_HLT : ICON_RIGHTARROW;
     const int width = ui_text_icon_width(this, "", icon, false);
-    uiDefIconTextBut(block, ButtonType::Label, icon, "", 0, 0, width, UI_UNIT_Y, nullptr, "");
+    Button *header_but = uiDefIconTextBut(block, ButtonType::Label, icon, "", 0, 0, width, UI_UNIT_Y, nullptr, "");
+    
+    /* Mark this button as a panel header button for identification in popups. */
+    header_but->flag2 |= BUT2_IS_PANEL_HEADER;
+    printf("[DEBUG] panel_prop: Set BUT2_IS_PANEL_HEADER flag on button (icon=%d, flag2=0x%x)\n",
+           icon, header_but->flag2);
 
     panel_layout.header = row;
   }

@@ -5,19 +5,21 @@
 /** \file
  * \ingroup edinterface
  * 
- * Enhanced color palette template - simplified version compatible with existing API.
+ * Enhanced color palette template - uses Layout Panel for collapsible interface.
  * Provides collapsible palette with size toggle and visual indicators.
  */
 
-#include <cstdio>
-
 #include "BLI_listbase.h"
+#include "BLI_string.h"
 #include "BLI_string_ref.hh"
 #include "BLI_math_vector.h"
+
+#include "MEM_guardedalloc.h"
 
 #include "BLT_translation.hh"
 
 #include "DNA_brush_types.h"
+#include "DNA_screen_types.h"
 #include "DNA_scene_types.h"
 
 #include "BKE_context.hh"
@@ -40,82 +42,47 @@
 namespace blender::ui {
 
 /* Palette state management */
-static bool palette_expanded = true;
 static bool palette_large_buttons = false;
 
 /* Forward declarations */
 static void ui_colorpicker_palette_add_cb(bContext *C, void *but1, void *arg);
 static void ui_colorpicker_palette_delete_cb(bContext *C, void *but1, void *arg);
-static void ui_colorpicker_palette_expand_collapse_cb(bContext *C, void *but1, void *arg);
 static void ui_colorpicker_palette_size_toggle_cb(bContext *C, void *but1, void *arg);
 
 void template_colorpicker_palette(Layout *layout, PointerRNA *ptr, const StringRefNull propname)
 {
-  printf("[DEBUG] template_colorpicker_palette: called with propname='%s'\n", propname.c_str());
-  printf("[DEBUG] template_colorpicker_palette: ptr->type=%p, ptr->data=%p\n", 
-         (void *)ptr->type, ptr->data);
-  
+  Block *block = layout->block();
   PropertyRNA *prop = RNA_struct_find_property(ptr, propname.c_str());
   
   if (!prop) {
-    printf("[DEBUG] template_colorpicker_palette: property '%s' not found in type %s\n", 
-           propname.c_str(), RNA_struct_identifier(ptr->type));
     RNA_warning("property not found: %s.%s", RNA_struct_identifier(ptr->type), propname.c_str());
     return;
   }
 
-  printf("[DEBUG] template_colorpicker_palette: property found\n");
   const PointerRNA cptr = RNA_property_pointer_get(ptr, prop);
-  printf("[DEBUG] template_colorpicker_palette: cptr.data=%p, cptr.type=%p\n", 
-         cptr.data, (void *)cptr.type);
   
   if (!cptr.data || !RNA_struct_is_a(cptr.type, &RNA_Palette)) {
-    printf("[DEBUG] template_colorpicker_palette: no palette data or wrong type\n");
     return;
   }
 
-  Block *block = layout->block();
   Palette *palette = static_cast<Palette *>(cptr.data);
-  printf("[DEBUG] template_colorpicker_palette: palette=%p (name='%s'), colors=%d\n",
-         (void *)palette, palette->id.name + 2, BLI_listbase_count(&palette->colors));
   
-  printf("[DEBUG] template_colorpicker_palette: creating UI elements\n");
-  
-  /* Collapsible header row - full width button */
-  Layout *header_col = &layout->column(true);
-  header_col->row(false); /* Create row for full-width button */
-  
-  const int triangle_icon = palette_expanded ? ICON_TRIA_DOWN : ICON_TRIA_RIGHT;
-  const char *header_text = "Palette";
-  printf("[DEBUG] template_colorpicker_palette: palette_expanded=%d, triangle_icon=%d\n", 
-         palette_expanded, triangle_icon);
-  
-  /* Get full width of layout for button */
-  const int full_width = layout->width();
-  
-  Button *header_but = uiDefIconTextBut(block,
-                                        ButtonType::But,
-                                        triangle_icon,
-                                        header_text,
-                                        0,
-                                        0,
-                                        short(full_width),
-                                        UI_UNIT_Y,
-                                        nullptr,
-                                        "Click to expand/collapse palette");
-  
-  button_func_set(header_but, ui_colorpicker_palette_expand_collapse_cb, header_but, block);
-  
-  /* Only show content if expanded */
-  if (!palette_expanded) {
-    printf("[DEBUG] template_colorpicker_palette: palette is collapsed, returning\n");
+  /* Get context for layout panel */
+  bContext *C = static_cast<bContext *>(block->evil_C);
+  if (C == nullptr) {
     return;
   }
+
+  PanelLayout panel = layout->panel(C, "color_picker_palette", false);
+  panel.header->label(IFACE_("Palette"), ICON_NONE);
   
-  printf("[DEBUG] template_colorpicker_palette: palette is expanded, creating content\n");
+  /* Only show content if panel is open */
+  if (!panel.body) {
+    return;
+  }
 
   /* Color controls row */
-  Layout *col = &layout->column(true);
+  Layout *col = &panel.body->column(true);
   col->row(true);
   
   /* Add/Delete buttons with callbacks for popup update */
@@ -170,16 +137,15 @@ void template_colorpicker_palette(Layout *layout, PointerRNA *ptr, const StringR
 
   /* Color grid */
   const float button_size = palette_large_buttons ? (UI_UNIT_X * 1.8f) : UI_UNIT_X;
-  const int cols_per_row = std::max(int(layout->width() / button_size), 1);
+  const int cols_per_row = std::max(int(panel.body->width() / button_size), 1);
   
-  col = &layout->column(true);
+  col = &panel.body->column(true);
   col->row(true);
 
   int row_cols = 0;
   int col_id = 0;
   
   /* Get current brush color for visual indicator */
-  bContext *C = static_cast<bContext *>(block->evil_C);
   Paint *paint = BKE_paint_get_active_from_context(C);
   float current_brush_color[3] = {0.0f, 0.0f, 0.0f};
   
@@ -189,9 +155,6 @@ void template_colorpicker_palette(Layout *layout, PointerRNA *ptr, const StringR
       copy_v3_v3(current_brush_color, brush_color);
     }
   }
-  
-  printf("[DEBUG] template_colorpicker_palette: creating color buttons, cols_per_row=%d, button_size=%.2f\n",
-         cols_per_row, button_size);
   
   int color_count = 0;
   LISTBASE_FOREACH (PaletteColor *, color, &palette->colors) {
@@ -232,9 +195,7 @@ void template_colorpicker_palette(Layout *layout, PointerRNA *ptr, const StringR
     col_id++;
     color_count++;
   }
-  
-  printf("[DEBUG] template_colorpicker_palette: created %d color buttons\n", color_count);
-  printf("[DEBUG] template_colorpicker_palette: completed\n");
+  (void)color_count;
 }
 
 /* Callback function for Add button - calls operator and triggers popup refresh */
@@ -442,52 +403,6 @@ static void ui_colorpicker_palette_delete_cb(bContext *C, void *but1, void *arg)
   }
   
   printf("[DEBUG] ui_colorpicker_palette_delete_cb: called operator and triggered popup refresh\n");
-}
-
-/* Callback function for Expand/Collapse button - toggles palette state and triggers popup refresh */
-static void ui_colorpicker_palette_expand_collapse_cb(bContext *C, void *but1, void *arg)
-{
-  Button *but = static_cast<Button *>(but1);
-  Block *block = static_cast<Block *>(arg);
-  
-  if (!block || !but || !C) {
-    return;
-  }
-  
-  /* Toggle palette expanded state */
-  palette_expanded = !palette_expanded;
-  
-  /* Get popup handle - try block->handle first, then region from context */
-  PopupBlockHandle *popup = block->handle;
-  if (!popup) {
-    ARegion *region = CTX_wm_region(C);
-    if (region && region->regiondata) {
-      popup = static_cast<PopupBlockHandle *>(region->regiondata);
-    }
-  }
-  if (!popup || !popup->can_refresh) {
-    printf("[DEBUG] ui_colorpicker_palette_expand_collapse_cb: popup handle not found or can_refresh=false\n");
-    return;
-  }
-  
-  /* Reset prev_block_rect to force popup resize */
-  popup->prev_block_rect.xmin = 0;
-  popup->prev_block_rect.ymin = 0;
-  popup->prev_block_rect.xmax = 0;
-  popup->prev_block_rect.ymax = 0;
-  
-  /* Set bounds type on current block for proper popup size recalculation */
-  block->bounds_type = BLOCK_BOUNDS_POPUP_MOUSE;
-  
-  /* Set RETURN_UPDATE to trigger popup refresh */
-  popup->menuretval = RETURN_UPDATE;
-  
-  /* Tag region for refresh UI - this triggers popup_block_refresh */
-  if (popup->region) {
-    ED_region_tag_refresh_ui(popup->region);
-  }
-  
-  printf("[DEBUG] ui_colorpicker_palette_expand_collapse_cb: toggled palette and triggered popup refresh\n");
 }
 
 /* Callback function for Size toggle button - toggles button size and triggers popup refresh */

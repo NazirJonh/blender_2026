@@ -2038,11 +2038,35 @@ static void ui_do_drag(const bContext *C, const wmEvent *event, Panel *panel)
 
 LayoutPanelHeader *layout_panel_header_under_mouse(const Panel &panel, const int my)
 {
+  const Block *block = panel.runtime->block;
+  if (!block) {
+    printf("[DEBUG] layout_panel_header_under_mouse: panel.runtime->block is null!\n");
+    return nullptr;
+  }
+
+  float relative_y = float(my - block->rect.ymax);
+
+  if (block->aspect != 0.0f && block->aspect != 1.0f) {
+    printf("[DEBUG] layout_panel_header_under_mouse: block->aspect=%.2f. Adjusting relative_y %.2f -> %.2f\n",
+           block->aspect, relative_y, relative_y / block->aspect);
+    relative_y /= block->aspect;
+  }
+
+  printf("[DEBUG] layout_panel_header_under_mouse: my=%d, block->rect.ymax=%.1f, relative_y=%.1f, headers=%zu\n",
+         my, block->rect.ymax, relative_y, panel.runtime->layout_panels.headers.size());
+
   for (LayoutPanelHeader &header : panel.runtime->layout_panels.headers) {
-    if (IN_RANGE(float(my - panel.runtime->block->rect.ymax), header.start_y, header.end_y)) {
+    printf("[DEBUG] layout_panel_header_under_mouse: Header range [%.1f, %.1f], checking if %.1f in range\n",
+           header.start_y, header.end_y, relative_y);
+
+    if (IN_RANGE(relative_y, header.start_y, header.end_y)) {
+      printf("[DEBUG] layout_panel_header_under_mouse: Found header! relative_y=%.1f is in [%.1f, %.1f]\n",
+             relative_y, header.start_y, header.end_y);
       return &header;
     }
   }
+
+  printf("[DEBUG] layout_panel_header_under_mouse: No header found (relative_y=%.1f not in any range)\n", relative_y);
   return nullptr;
 }
 
@@ -2208,12 +2232,17 @@ void panel_drag_collapse_handler_add(const bContext *C, const bool was_open)
 bool ui_layout_panel_toggle_open(const bContext *C, LayoutPanelHeader *header)
 {
   const bool is_open = RNA_boolean_get(&header->open_owner_ptr, header->open_prop_name.c_str());
+  printf("[DEBUG] ui_layout_panel_toggle_open: Current state is_open=%d\n", is_open);
+
   RNA_boolean_set(&header->open_owner_ptr, header->open_prop_name.c_str(), !is_open);
+  const bool new_state = RNA_boolean_get(&header->open_owner_ptr, header->open_prop_name.c_str());
+  printf("[DEBUG] ui_layout_panel_toggle_open: New state new_state=%d\n", new_state);
+
   RNA_property_update(
       const_cast<bContext *>(C),
       &header->open_owner_ptr,
       RNA_struct_find_property(&header->open_owner_ptr, header->open_prop_name.c_str()));
-  return !is_open;
+  return new_state;
 }
 
 static void ui_handle_layout_panel_header(
@@ -2227,7 +2256,15 @@ static void ui_handle_layout_panel_header(
     return;
   }
   const bool new_state = ui_layout_panel_toggle_open(C, header);
-  ED_region_tag_redraw(CTX_wm_region(C));
+  ARegion *region = CTX_wm_region_popup(C);
+  if (!region) {
+    region = CTX_wm_region(C);
+  }
+  ED_region_tag_redraw(region);
+  /* For popups, also tag for UI refresh to update layout when panel state changes */
+  if (block_is_popup_any(block)) {
+    ED_region_tag_refresh_ui(region);
+  }
   WM_tooltip_clear(C, CTX_wm_window(C));
 
   if (event_type == LEFTMOUSE) {
@@ -2249,7 +2286,10 @@ static void ui_handle_panel_header(const bContext *C,
                                    const bool shift)
 {
   Panel *panel = block->panel;
-  ARegion *region = CTX_wm_region(C);
+  ARegion *region = CTX_wm_region_popup(C);
+  if (!region) {
+    region = CTX_wm_region(C);
+  }
 
   BLI_assert(panel->type != nullptr);
   BLI_assert(!(panel->type->flag & PANEL_TYPE_NO_HEADER));
@@ -2307,6 +2347,9 @@ static void ui_handle_panel_header(const bContext *C,
     }
 
     set_panels_list_data_expand_flag(C, region);
+    if (block_is_popup_any(block)) {
+      ED_region_tag_refresh_ui(region);
+    }
     panel_activate_state(C, panel, PANEL_STATE_ANIMATION);
     return;
   }
@@ -2840,7 +2883,10 @@ static void panel_activate_state(const bContext *C, Panel *panel, const HandlePa
 {
   HandlePanelData *data = static_cast<HandlePanelData *>(panel->activedata);
   wmWindow *win = CTX_wm_window(C);
-  ARegion *region = CTX_wm_region(C);
+  ARegion *region = CTX_wm_region_popup(C);
+  if (!region) {
+    region = CTX_wm_region(C);
+  }
 
   if (data != nullptr && data->state == state) {
     return;
