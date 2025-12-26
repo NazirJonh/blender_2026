@@ -1099,8 +1099,6 @@ static void ui_colorpicker_palette(Block *block,
     return;
   }
 
-  Palette *palette = paint->palette;
-  
   /* Create layout for palette */
   const uiStyle *style = style_get_dpi();
   Layout &layout = block_layout(block,
@@ -1113,32 +1111,6 @@ static void ui_colorpicker_palette(Block *block,
                                 0,
                                 style);
   block_layout_set_current(block, &layout);
-
-  /* If no palette, show button to create one */
-  if (!palette) {
-    Layout *row = &layout.row(false);
-    Block *row_block = row->block();
-    Button *create_but = uiDefIconTextButO(row_block,
-                                          ButtonType::But,
-                                          "PALETTE_OT_new",
-                                          wm::OpCallContext::InvokeDefault,
-                                          ICON_ADD,
-                                          IFACE_("Create Palette"),
-                                          0,
-                                          0,
-                                          short(picker_width),
-                                          short(UI_UNIT_Y),
-                                          std::nullopt);
-    button_flag_disable(create_but, BUT_UNDO);
-
-    /* Resolve layout */
-    int2 resolved_size = block_layout_resolve(block);
-
-    if (resolved_size.y > 0) {
-      *yco_ptr -= resolved_size.y;
-    }
-    return;
-  }
 
   /* Create RNA pointer for paint settings */
   Scene *scene = CTX_data_scene(C);

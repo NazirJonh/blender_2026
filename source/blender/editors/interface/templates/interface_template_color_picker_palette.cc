@@ -59,24 +59,16 @@ void template_colorpicker_palette(Layout *layout, PointerRNA *ptr, const StringR
     return;
   }
 
-  const PointerRNA cptr = RNA_property_pointer_get(ptr, prop);
-  
-  if (!cptr.data || !RNA_struct_is_a(cptr.type, &RNA_Palette)) {
-    return;
-  }
-
-  Palette *palette = static_cast<Palette *>(cptr.data);
-  
   /* Get context for layout panel */
   bContext *C = static_cast<bContext *>(block->evil_C);
   if (C == nullptr) {
     return;
   }
 
-  PanelLayout panel = layout->panel(C, "color_picker_palette", false);
+  PanelLayout panel = layout->panel(C, "color_picker_palette", true);
   printf("[DEBUG] template_colorpicker_palette: Created panel, header=%p, body=%p\n",
          panel.header, panel.body);
-  panel.header->label(IFACE_("Palette"), ICON_NONE);
+  panel.header->label(IFACE_("Color Palette"), ICON_COLOR);
   
   /* Only show content if panel is open */
   if (!panel.body) {
@@ -84,6 +76,16 @@ void template_colorpicker_palette(Layout *layout, PointerRNA *ptr, const StringR
     return;
   }
   printf("[DEBUG] template_colorpicker_palette: Panel body is not null, continuing\n");
+
+  const PointerRNA cptr = RNA_property_pointer_get(ptr, prop);
+  
+  /* If no palette, show template_id selector in panel body */
+  if (!cptr.data || !RNA_struct_is_a(cptr.type, &RNA_Palette)) {
+    template_id(panel.body, C, ptr, propname, "PALETTE_OT_new", nullptr, nullptr, 0, false, std::nullopt);
+    return;
+  }
+
+  Palette *palette = static_cast<Palette *>(cptr.data);
 
   /* Color controls row */
   Layout *col = &panel.body->column(true);
