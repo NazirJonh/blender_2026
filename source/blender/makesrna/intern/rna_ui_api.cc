@@ -605,6 +605,31 @@ static void rna_uiTemplateID(Layout *layout,
   template_id(layout, C, ptr, propname, newop, openop, unlinkop, filter, live_icon, text);
 }
 
+static void rna_uiTemplateIDSimple(Layout *layout,
+                                   bContext *C,
+                                   PointerRNA *ptr,
+                                   const char *propname,
+                                   const char *newop,
+                                   const char *unlinkop,
+                                   int filter,
+                                   const char *name,
+                                   const char *text_ctxt,
+                                   bool translate)
+{
+  PropertyRNA *prop = RNA_struct_find_property(ptr, propname);
+
+  if (!prop) {
+    RNA_warning("property not found: %s.%s", RNA_struct_identifier(ptr->type), propname);
+    return;
+  }
+
+  /* Get translated name (label). */
+  std::optional<StringRefNull> text = rna_translate_ui_text(
+      name, text_ctxt, nullptr, prop, translate);
+
+  template_id_simple(layout, C, ptr, StringRefNull(propname), newop, unlinkop, filter, text);
+}
+
 static void rna_uiTemplateAnyID(Layout *layout,
                                 PointerRNA *ptr,
                                 const char *propname,
@@ -1689,6 +1714,24 @@ void RNA_api_ui_layout(StructRNA *srna)
                "",
                "Optionally limit the items which can be selected");
   RNA_def_boolean(func, "live_icon", false, "", "Show preview instead of fixed icon");
+  api_ui_item_common_text(func);
+
+  func = RNA_def_function(srna, "template_ID_simple", "rna_uiTemplateIDSimple");
+  RNA_def_function_flag(func, FUNC_USE_CONTEXT);
+  RNA_def_function_ui_description(
+      func,
+      "Simplified ID template that only shows essential elements: browse/search field, name edit "
+      "(if ID exists), Add New button (if newop provided), and Unlink button (if unlinkop provided). "
+      "Does NOT show: Display number, Fake User, Local/Override buttons, Open button, etc.");
+  api_ui_item_rna_common(func);
+  RNA_def_string(func, "new", nullptr, 0, "", "Operator identifier to create a new ID block");
+  RNA_def_string(func, "unlink", nullptr, 0, "", "Operator identifier to unlink the ID block");
+  RNA_def_enum(func,
+               "filter",
+               id_template_filter_items,
+               blender::ui::TEMPLATE_ID_FILTER_ALL,
+               "",
+               "Optionally limit the items which can be selected");
   api_ui_item_common_text(func);
 
   func = RNA_def_function(srna, "template_ID_preview", "template_id_preview");

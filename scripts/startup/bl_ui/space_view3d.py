@@ -30,6 +30,16 @@ from bpy.app.translations import (
     contexts as i18n_contexts,
 )
 
+# Register RNA property for palette size toggle state (session-persistent)
+# This property will be added to WindowManager to store state like DNA in session
+if not hasattr(bpy.types.WindowManager, "palette_large_buttons"):
+    bpy.types.WindowManager.palette_large_buttons = bpy.props.BoolProperty(
+        name="Palette Large Buttons",
+        description="Use larger color swatches in palette",
+        default=False,
+        options={'SKIP_SAVE'}  # Don't save to file, only session-persistent
+    )
+
 
 class VIEW3D_HT_tool_header(Header):
     bl_space_type = 'VIEW_3D'
@@ -8717,11 +8727,27 @@ class VIEW3D_PT_paint_vertex_context_menu(Panel):
             header.label(text="Color Palette", icon='COLOR')
 
             if body:
-                # Palette selector
-                body.template_ID(settings, "palette", new="palette.new")
+                # Palette selector (simplified version with unlink button)
+                body.template_ID_simple(settings, "palette", new="palette.new", unlink="palette.unlink")
 
                 if settings.palette:
-                    body.template_palette(settings, "palette", color=True)
+                    # Color controls row
+                    col = body.column(align=True)
+                    button_row = col.row(align=False)
+                    
+                    # Left side: Add/Delete buttons
+                    left_buttons = button_row.row(align=True)
+                    left_buttons.operator("palette.color_add", icon='ADD', text="")
+                    left_buttons.operator("palette.color_delete", icon='REMOVE', text="")
+                    
+                    # Right side: Size toggle button
+                    right_buttons = button_row.row(align=True)
+                    right_buttons.alignment = 'RIGHT'
+                    size_icon = 'FULLSCREEN_EXIT' if context.window_manager.palette_large_buttons else 'FULLSCREEN_ENTER'
+                    right_buttons.operator("palette.size_toggle", icon=size_icon, text="")
+                    
+                    # Custom palette display with size control (instead of template_palette)
+                    _draw_custom_palette(body, context, settings.palette)
 
 
 class VIEW3D_PT_paint_texture_context_menu(Panel):
@@ -8772,11 +8798,27 @@ class VIEW3D_PT_paint_texture_context_menu(Panel):
             header.label(text="Color Palette", icon='COLOR')
 
             if body:
-                # Palette selector
-                body.template_ID(settings, "palette", new="palette.new")
+                # Palette selector (simplified version with unlink button)
+                body.template_ID_simple(settings, "palette", new="palette.new", unlink="palette.unlink")
 
                 if settings.palette:
-                    body.template_palette(settings, "palette", color=True)
+                    # Color controls row
+                    col = body.column(align=True)
+                    button_row = col.row(align=False)
+                    
+                    # Left side: Add/Delete buttons
+                    left_buttons = button_row.row(align=True)
+                    left_buttons.operator("palette.color_add", icon='ADD', text="")
+                    left_buttons.operator("palette.color_delete", icon='REMOVE', text="")
+                    
+                    # Right side: Size toggle button
+                    right_buttons = button_row.row(align=True)
+                    right_buttons.alignment = 'RIGHT'
+                    size_icon = 'FULLSCREEN_EXIT' if context.window_manager.palette_large_buttons else 'FULLSCREEN_ENTER'
+                    right_buttons.operator("palette.size_toggle", icon=size_icon, text="")
+                    
+                    # Custom palette display with size control (instead of template_palette)
+                    _draw_custom_palette(body, context, settings.palette)
 
 
 class VIEW3D_PT_paint_weight_context_menu(Panel):
@@ -9206,6 +9248,78 @@ class VIEW3D_AST_brush_gpencil_weight(AssetShelfHiddenByDefault, View3DAssetShel
     brush_type_prop = "gpencil_weight_brush_type"
 
 
+# Custom palette drawing function (replaces template_palette to support size control)
+def _draw_custom_palette(layout, context, palette):
+    """Draw custom palette color grid with size control (similar to C++ template_colorpicker_palette)"""
+    if not palette:
+        return
+    
+    # Calculate button size (similar to C++ implementation)
+    # base_size factor: 1.8 for large, 1.0 for normal
+    base_size_factor = 1.8 if context.window_manager.palette_large_buttons else 1.0
+    
+    # Approximate columns per row (typical popup width ~160-200 pixels, UI_UNIT_X ~20 pixels)
+    # For large buttons: ~4-5 cols, for normal: ~8-10 cols
+    cols_per_row = max(int(8 / base_size_factor), 1)
+    
+    # Create color grid
+    col_grid = layout.column(align=True)
+    row = col_grid.row(align=True)
+    
+    color_count = len(palette.colors)
+    if color_count == 0:
+        # Show empty palette message
+        empty_col = layout.column(align=True)
+        empty_col.alignment = 'CENTER'
+        empty_col.label(text="No colors in palette", icon='INFO')
+        return
+    
+    # Get current brush color for visual indicator (optional)
+    brush_color = None
+    try:
+        if context.tool_settings:
+            paint_settings = getattr(context.tool_settings, 'vertex_paint', None) or \
+                           getattr(context.tool_settings, 'image_paint', None)
+            if paint_settings and paint_settings.brush:
+                brush = paint_settings.brush
+                if hasattr(brush, 'color'):
+                    brush_color = list(brush.color[:3])
+    except:
+        pass
+    
+    row_cols = 0
+    for idx, color in enumerate(palette.colors):
+        if row_cols >= cols_per_row:
+            row = col_grid.row(align=True)
+            row_cols = 0
+        
+        # Create color button with size control using scale
+        color_item = row.row(align=True)
+        color_item.scale_x = base_size_factor
+        color_item.scale_y = base_size_factor
+        
+        # Use prop to create color button (this creates a color picker button)
+        color_item.prop(color, "color", text="")
+        
+        row_cols += 1
+
+
+# Palette Size Toggle Operator
+class PALETTE_OT_size_toggle(bpy.types.Operator):
+    """Toggle palette color swatch size"""
+    bl_idname = "palette.size_toggle"
+    bl_label = "Toggle Palette Size"
+    bl_options = {'INTERNAL'}
+
+    def execute(self, context):
+        # Toggle state stored in WindowManager (session-persistent like DNA)
+        context.window_manager.palette_large_buttons = not context.window_manager.palette_large_buttons
+        
+        # Trigger popup refresh by returning UPDATE
+        # This ensures the popup redraws after the toggle
+        return {'FINISHED'}
+
+
 # Enhanced Color Palette Context Menu
 class VIEW3D_MT_palette_context_menu(bpy.types.Menu):
     """Context menu for color palette operations"""
@@ -9531,6 +9645,7 @@ classes = (
     VIEW3D_PT_greasepencil_weight_context_menu,
     VIEW3D_MT_palette_context_menu,
     VIEW3D_MT_palette_sort,
+    PALETTE_OT_size_toggle,
 )
 
 
