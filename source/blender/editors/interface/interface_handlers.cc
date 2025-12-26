@@ -72,6 +72,7 @@
 
 #include "RNA_access.hh"
 #include "RNA_prototypes.hh"
+#include "RNA_types.hh"
 
 #include "CLG_log.h"
 
@@ -6599,12 +6600,45 @@ static bool ui_numedit_but_UNITVEC(
   return changed;
 }
 
+/* Helper function to check if a button is a palette color button */
+static bool ui_is_palette_color_button(Button *but)
+{
+  if (but->type != ButtonType::Color) {
+    return false;
+  }
+  
+  ButtonColor *color_but = (ButtonColor *)but;
+  
+  /* Check if flag is set (for C++ created buttons) */
+  if (color_but->is_pallete_color) {
+    return true;
+  }
+  
+  /* Check if RNA pointer is PaletteColor (for Python created buttons) */
+  if (but->rnapoin.type && RNA_struct_is_a(but->rnapoin.type, &RNA_PaletteColor)) {
+    return true;
+  }
+  
+  return false;
+}
+
 static void ui_palette_set_active(ButtonColor *color_but)
 {
+  /* ButtonColor inherits from Button, so we can use it directly */
+  Button *but = static_cast<Button *>(color_but);
+  
   if (color_but->is_pallete_color) {
-    Palette *palette = (Palette *)color_but->rnapoin.owner_id;
-    const PaletteColor *color = static_cast<const PaletteColor *>(color_but->rnapoin.data);
+    Palette *palette = (Palette *)but->rnapoin.owner_id;
+    const PaletteColor *color = static_cast<const PaletteColor *>(but->rnapoin.data);
     palette->active_color = BLI_findindex(&palette->colors, color);
+  }
+  else if (but->rnapoin.type && RNA_struct_is_a(but->rnapoin.type, &RNA_PaletteColor)) {
+    /* Handle Python-created palette color buttons */
+    Palette *palette = (Palette *)but->rnapoin.owner_id;
+    const PaletteColor *color = static_cast<const PaletteColor *>(but->rnapoin.data);
+    if (palette && color) {
+      palette->active_color = BLI_findindex(&palette->colors, color);
+    }
   }
 }
 
@@ -6740,6 +6774,42 @@ static int ui_do_but_COLOR(bContext *C, Button *but, HandleButtonData *data, con
 #endif
     /* regular open menu */
     if (ELEM(event->type, LEFTMOUSE, EVT_PADENTER, EVT_RETKEY) && event->val == KM_PRESS) {
+      /* Check if this is a palette color button (from Python or C++) */
+      bool is_palette_color = ui_is_palette_color_button(but);
+      
+      if (is_palette_color) {
+        /* For palette color buttons, apply color to brush instead of opening color picker */
+        Paint *paint = BKE_paint_get_active_from_context(C);
+        bool is_in_paint_mode = ui_is_in_paint_mode(C);
+        
+        if (paint != nullptr && is_in_paint_mode) {
+          Brush *brush = BKE_paint_brush(paint);
+          
+          if (brush != nullptr) {
+            /* Get color from palette button */
+            float palette_color[4];
+            if (ui_palette_color_get_from_button(but, palette_color)) {
+              /* Apply color to brush */
+              BKE_brush_color_set(paint, brush, palette_color);
+              
+              /* Update brush property */
+              PropertyRNA *brush_color_prop;
+              PointerRNA brush_ptr = RNA_id_pointer_create(&brush->id);
+              brush_color_prop = RNA_struct_find_property(&brush_ptr, "color");
+              RNA_property_update(C, &brush_ptr, brush_color_prop);
+              
+              /* Set active color in palette */
+              ui_palette_set_active(color_but);
+              
+              /* Exit button state */
+              button_activate_state(C, but, BUTTON_STATE_EXIT);
+              return WM_UI_HANDLER_BREAK;
+            }
+          }
+        }
+      }
+      
+      /* Default behavior: open color picker */
       ui_palette_set_active(color_but);
       button_activate_state(C, but, BUTTON_STATE_MENU_OPEN);
       return WM_UI_HANDLER_BREAK;
@@ -6802,7 +6872,10 @@ static int ui_do_but_COLOR(bContext *C, Button *but, HandleButtonData *data, con
     }
 
     if (event->type == LEFTMOUSE && event->val == KM_RELEASE) {
-      if (color_but->is_pallete_color) {
+      /* Check if this is a palette color button (from Python or C++) */
+      bool is_palette_color = ui_is_palette_color_button(but);
+      
+      if (is_palette_color) {
         if ((event->modifier & KM_CTRL) == 0) {
           Paint *paint = BKE_paint_get_active_from_context(C);
           bool is_in_paint_mode = ui_is_in_paint_mode(C);
