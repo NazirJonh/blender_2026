@@ -2136,14 +2136,21 @@ static void ui_panel_drag_collapse(const bContext *C,
       rect.ymax = block->rect.ymax + header.end_y;
 
       if (BLI_rctf_isect_segment(&rect, xy_a_block, xy_b_block)) {
-        RNA_boolean_set(
-            &header.open_owner_ptr, header.open_prop_name.c_str(), !dragcol_data->was_first_open);
-        RNA_property_update(
-            const_cast<bContext *>(C),
-            &header.open_owner_ptr,
-            RNA_struct_find_property(&header.open_owner_ptr, header.open_prop_name.c_str()));
-        ED_region_tag_redraw(region);
-        ED_region_tag_refresh_ui(region);
+        /* Check if header has valid open_owner_ptr before using it.
+         * Headers created for additional header buttons may have invalid pointers. */
+        if (header.open_owner_ptr.data && !header.open_prop_name.empty()) {
+          RNA_boolean_set(
+              &header.open_owner_ptr, header.open_prop_name.c_str(), !dragcol_data->was_first_open);
+          PropertyRNA *prop = RNA_struct_find_property(&header.open_owner_ptr, header.open_prop_name.c_str());
+          if (prop) {
+            RNA_property_update(
+                const_cast<bContext *>(C),
+                &header.open_owner_ptr,
+                prop);
+          }
+          ED_region_tag_redraw(region);
+          ED_region_tag_refresh_ui(region);
+        }
       }
     }
 
@@ -2231,6 +2238,14 @@ void panel_drag_collapse_handler_add(const bContext *C, const bool was_open)
 
 bool ui_layout_panel_toggle_open(const bContext *C, LayoutPanelHeader *header)
 {
+  /* Check if header has valid open_owner_ptr before using it.
+   * Headers created for additional header buttons may have invalid pointers. */
+  if (!header->open_owner_ptr.data || header->open_prop_name.empty()) {
+    printf("[DEBUG] ui_layout_panel_toggle_open: Invalid header, open_owner_ptr.data=%p, open_prop_name='%s'\n",
+           header->open_owner_ptr.data, header->open_prop_name.c_str());
+    return false;
+  }
+
   const bool is_open = RNA_boolean_get(&header->open_owner_ptr, header->open_prop_name.c_str());
   printf("[DEBUG] ui_layout_panel_toggle_open: Current state is_open=%d\n", is_open);
 
@@ -2238,10 +2253,13 @@ bool ui_layout_panel_toggle_open(const bContext *C, LayoutPanelHeader *header)
   const bool new_state = RNA_boolean_get(&header->open_owner_ptr, header->open_prop_name.c_str());
   printf("[DEBUG] ui_layout_panel_toggle_open: New state new_state=%d\n", new_state);
 
-  RNA_property_update(
-      const_cast<bContext *>(C),
-      &header->open_owner_ptr,
-      RNA_struct_find_property(&header->open_owner_ptr, header->open_prop_name.c_str()));
+  PropertyRNA *prop = RNA_struct_find_property(&header->open_owner_ptr, header->open_prop_name.c_str());
+  if (prop) {
+    RNA_property_update(
+        const_cast<bContext *>(C),
+        &header->open_owner_ptr,
+        prop);
+  }
   return new_state;
 }
 
