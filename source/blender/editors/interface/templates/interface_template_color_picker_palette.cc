@@ -160,64 +160,73 @@ void template_colorpicker_palette(Layout *layout, PointerRNA *ptr, const StringR
   /* Color grid */
   const float button_size = palette_large_buttons ? (UI_UNIT_X * 1.8f) : UI_UNIT_X;
   const int cols_per_row = std::max(int(panel.body->width() / button_size), 1);
-  
-  Layout *col_grid = &panel.body->column(true);
-  col_grid->row(true);
 
-  int row_cols = 0;
-  int col_id = 0;
-  
-  /* Get current brush color for visual indicator */
-  Paint *paint = BKE_paint_get_active_from_context(C);
-  float current_brush_color[3] = {0.0f, 0.0f, 0.0f};
-  
-  if (paint && paint->brush) {
-    const float *brush_color = BKE_brush_color_get(paint, paint->brush);
-    if (brush_color) {
-      copy_v3_v3(current_brush_color, brush_color);
-    }
+  /* Check if palette has any colors */
+  int color_count = BLI_listbase_count(&palette->colors);
+
+  if (color_count == 0) {
+    /* Show empty palette message in gray/disabled style */
+    Layout *empty_layout = &panel.body->column(true);
+    empty_layout->alignment_set(LayoutAlign::Center);
+    Button *empty_label = uiItemL_ex(empty_layout, IFACE_("No colors in palette"), ICON_NONE, false, false);
+    button_flag_enable(empty_label, BUT_DISABLED);
   }
-  
-  int color_count = 0;
-  LISTBASE_FOREACH (PaletteColor *, color, &palette->colors) {
-    if (row_cols >= cols_per_row) {
-      col_grid->row(true);
-      row_cols = 0;
-    }
+  else {
+    Layout *col_grid = &panel.body->column(true);
+    col_grid->row(true);
 
-    PointerRNA color_ptr = RNA_pointer_create_discrete(&palette->id, &RNA_PaletteColor, color);
-    ButtonColor *color_but = (ButtonColor *)uiDefButR(block,
-                                                       ButtonType::Color,
-                                                       "",
-                                                       0,
-                                                       0,
-                                                       button_size,
-                                                       button_size,
-                                                       &color_ptr,
-                                                       "color",
-                                                       -1,
-                                                       0.0,
-                                                       1.0,
-                                                       "");
-    color_but->is_pallete_color = true;
-    color_but->palette_color_index = col_id;
+    int row_cols = 0;
+    int col_id = 0;
 
-    /* Check if this is the active color (visual indicator) */
+    /* Get current brush color for visual indicator */
+    Paint *paint = BKE_paint_get_active_from_context(C);
+    float current_brush_color[3] = {0.0f, 0.0f, 0.0f};
+
     if (paint && paint->brush) {
-      if (fabsf(color->rgb[0] - current_brush_color[0]) < 0.01f &&
-          fabsf(color->rgb[1] - current_brush_color[1]) < 0.01f &&
-          fabsf(color->rgb[2] - current_brush_color[2]) < 0.01f)
-      {
-        /* Mark as selected to show visual indicator */
-        color_but->flag |= UI_SELECT;
+      const float *brush_color = BKE_brush_color_get(paint, paint->brush);
+      if (brush_color) {
+        copy_v3_v3(current_brush_color, brush_color);
       }
     }
 
-    row_cols++;
-    col_id++;
-    color_count++;
+    LISTBASE_FOREACH (PaletteColor *, color, &palette->colors) {
+      if (row_cols >= cols_per_row) {
+        col_grid->row(true);
+        row_cols = 0;
+      }
+
+      PointerRNA color_ptr = RNA_pointer_create_discrete(&palette->id, &RNA_PaletteColor, color);
+      ButtonColor *color_but = (ButtonColor *)uiDefButR(block,
+                                                         ButtonType::Color,
+                                                         "",
+                                                         0,
+                                                         0,
+                                                         button_size,
+                                                         button_size,
+                                                         &color_ptr,
+                                                         "color",
+                                                         -1,
+                                                         0.0,
+                                                         1.0,
+                                                         "");
+      color_but->is_pallete_color = true;
+      color_but->palette_color_index = col_id;
+
+      /* Check if this is the active color (visual indicator) */
+      if (paint && paint->brush) {
+        if (fabsf(color->rgb[0] - current_brush_color[0]) < 0.01f &&
+            fabsf(color->rgb[1] - current_brush_color[1]) < 0.01f &&
+            fabsf(color->rgb[2] - current_brush_color[2]) < 0.01f)
+        {
+          /* Mark as selected to show visual indicator */
+          color_but->flag |= UI_SELECT;
+        }
+      }
+
+      row_cols++;
+      col_id++;
+    }
   }
-  (void)color_count;
 }
 
 /* Callback function for Add button - calls operator and triggers popup refresh */
