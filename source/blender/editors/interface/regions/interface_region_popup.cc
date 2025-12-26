@@ -1312,4 +1312,43 @@ void alert(bContext *C,
 
 /** \} */
 
+/* -------------------------------------------------------------------- */
+/** \name Popup Block Force Refresh
+ * \{ */
+
+void popup_block_force_refresh(ARegion *region)
+{
+  if (!region || !region->regiondata) {
+    return;
+  }
+
+  PopupBlockHandle *popup = static_cast<PopupBlockHandle *>(region->regiondata);
+  if (popup && popup->can_refresh) {
+    /* Reset prev_block_rect to force popup resize.
+     * This matches the pattern used in ui_handle_layout_panel_header and
+     * ui_handle_menus_recursive for popup resizing. */
+    BLI_rctf_init(&popup->prev_block_rect, 0, 0, 0, 0);
+
+    /* Set RETURN_UPDATE to trigger popup refresh.
+     * This signals the event handler to call popup_block_refresh. */
+    popup->menuretval = RETURN_UPDATE;
+
+    /* Tag region for redraw and refresh UI - use the region passed to the function,
+     * which should be the popup region itself */
+    ED_region_tag_redraw(region);
+    ED_region_tag_refresh_ui(region);
+  }
+  else {
+    /* Debug: log if refresh cannot be performed */
+    if (!popup) {
+      printf("[DEBUG] popup_block_force_refresh: popup is null\n");
+    }
+    else if (!popup->can_refresh) {
+      printf("[DEBUG] popup_block_force_refresh: popup->can_refresh is false\n");
+    }
+  }
+}
+
+/** \} */
+
 }  // namespace blender::ui

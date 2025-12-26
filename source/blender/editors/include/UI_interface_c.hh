@@ -2169,6 +2169,13 @@ void popup_handlers_add(bContext *C, ListBase *handlers, PopupBlockHandle *popup
 void popup_handlers_remove(ListBase *handlers, PopupBlockHandle *popup);
 void popup_handlers_remove_all(bContext *C, ListBase *handlers);
 
+/**
+ * Force a popup to refresh by resetting its previous block rect.
+ * This causes the popup to recalculate its size on the next redraw.
+ * \param region: The region containing the popup (must have regiondata set to PopupBlockHandle).
+ */
+void popup_block_force_refresh(ARegion *region);
+
 /* Module
  *
  * init and exit should be called before using this module. init_userdef must

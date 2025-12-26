@@ -40,6 +40,8 @@
 #include "WM_api.hh"
 #include "WM_types.hh"
 
+#include "UI_interface_c.hh"
+
 #include "RNA_access.hh"
 #include "RNA_define.hh"
 
@@ -135,6 +137,20 @@ static wmOperatorStatus palette_new_exec(bContext *C, wmOperator * /*op*/)
   palette = BKE_palette_add(bmain, "Palette");
 
   BKE_paint_palette_set(paint, palette);
+
+  /* Update popup if it exists */
+  ARegion *region = CTX_wm_region_popup(C);
+  if (!region) {
+    region = CTX_wm_region(C);
+  }
+  if (region) {
+    printf("[DEBUG] palette_new_exec: calling popup_block_force_refresh on region %p\n",
+           (void *)region);
+    blender::ui::popup_block_force_refresh(region);
+  }
+  else {
+    printf("[DEBUG] palette_new_exec: no region found for popup refresh\n");
+  }
 
   return OPERATOR_FINISHED;
 }
@@ -292,6 +308,47 @@ static void PALETTE_OT_color_delete(wmOperatorType *ot)
   ot->poll = palette_poll;
   /* flags */
   ot->flag = OPTYPE_REGISTER | OPTYPE_UNDO;
+}
+
+static wmOperatorStatus palette_unlink_exec(bContext *C, wmOperator * /*op*/)
+{
+  Paint *paint = BKE_paint_get_active_from_context(C);
+  if (!paint) {
+    return OPERATOR_CANCELLED;
+  }
+
+  /* Unlink palette */
+  BKE_paint_palette_set(paint, nullptr);
+
+  /* Update popup if it exists */
+  ARegion *region = CTX_wm_region_popup(C);
+  if (!region) {
+    region = CTX_wm_region(C);
+  }
+  if (region) {
+    printf("[DEBUG] palette_unlink_exec: calling popup_block_force_refresh on region %p\n",
+           (void *)region);
+    blender::ui::popup_block_force_refresh(region);
+  }
+  else {
+    printf("[DEBUG] palette_unlink_exec: no region found for popup refresh\n");
+  }
+
+  return OPERATOR_FINISHED;
+}
+
+static void PALETTE_OT_unlink(wmOperatorType *ot)
+{
+  /* identifiers */
+  ot->name = "Unlink Palette";
+  ot->description = "Unlink palette from paint settings";
+  ot->idname = "PALETTE_OT_unlink";
+
+  /* API callbacks. */
+  ot->exec = palette_unlink_exec;
+
+  /* flags */
+  ot->flag = OPTYPE_INTERNAL;
 }
 
 /* --- Extract Palette from Image. */
@@ -1027,6 +1084,7 @@ void ED_operatortypes_paint()
   WM_operatortype_append(PALETTE_OT_new);
   WM_operatortype_append(PALETTE_OT_color_add);
   WM_operatortype_append(PALETTE_OT_color_delete);
+  WM_operatortype_append(PALETTE_OT_unlink);
 
   WM_operatortype_append(PALETTE_OT_extract_from_image);
   WM_operatortype_append(PALETTE_OT_sort);

@@ -85,11 +85,18 @@ void template_colorpicker_palette(Layout *layout, PointerRNA *ptr, const StringR
     return;
   }
 
+  /* Show palette selector with name, duplicate and delete options */
+  /* Use custom unlink operator to refresh popup after unlink */
+  template_id(panel.body, C, ptr, propname, "PALETTE_OT_new", nullptr, "PALETTE_OT_unlink", 0, false, std::nullopt);
+
   Palette *palette = static_cast<Palette *>(cptr.data);
 
   /* Color controls row */
   Layout *col = &panel.body->column(true);
-  col->row(true);
+  Layout *button_row = &col->row(false);
+  
+  /* Left side: Add/Delete buttons */
+  Layout *left_buttons = &button_row->row(true);
   
   /* Add/Delete buttons with callbacks for popup update */
   /* Use regular buttons with callbacks instead of operator buttons to ensure
@@ -126,7 +133,10 @@ void template_colorpicker_palette(Layout *layout, PointerRNA *ptr, const StringR
   /* Disable BUT_ICON_LEFT flag to center icon instead of left-aligning */
   button_drawflag_disable(del_but, BUT_ICON_LEFT);
   
-  /* Size toggle button */
+  /* Right side: Size toggle button */
+  Layout *right_buttons = &button_row->row(true);
+  right_buttons->alignment_set(LayoutAlign::Right);
+  
   const int size_icon = palette_large_buttons ? ICON_FULLSCREEN_EXIT : ICON_FULLSCREEN_ENTER;
   const char *size_tooltip = palette_large_buttons ? "Use smaller color swatches" :
                                                       "Use larger color swatches";
@@ -151,8 +161,8 @@ void template_colorpicker_palette(Layout *layout, PointerRNA *ptr, const StringR
   const float button_size = palette_large_buttons ? (UI_UNIT_X * 1.8f) : UI_UNIT_X;
   const int cols_per_row = std::max(int(panel.body->width() / button_size), 1);
   
-  col = &panel.body->column(true);
-  col->row(true);
+  Layout *col_grid = &panel.body->column(true);
+  col_grid->row(true);
 
   int row_cols = 0;
   int col_id = 0;
@@ -171,7 +181,7 @@ void template_colorpicker_palette(Layout *layout, PointerRNA *ptr, const StringR
   int color_count = 0;
   LISTBASE_FOREACH (PaletteColor *, color, &palette->colors) {
     if (row_cols >= cols_per_row) {
-      col->row(true);
+      col_grid->row(true);
       row_cols = 0;
     }
 
