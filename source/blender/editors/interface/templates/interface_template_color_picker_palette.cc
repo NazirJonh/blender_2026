@@ -106,6 +106,8 @@ void template_colorpicker_palette(Layout *layout, PointerRNA *ptr, const StringR
   /* Store palette pointer in button's custom data for callback access */
   add_but->custom_data = palette;
   button_func_set(add_but, ui_colorpicker_palette_add_cb, add_but, block);
+  /* Disable BUT_ICON_LEFT flag to center icon instead of left-aligning */
+  button_drawflag_disable(add_but, BUT_ICON_LEFT);
                 
   Button *del_but = uiDefIconBut(block,
                                  ButtonType::But,
@@ -119,6 +121,8 @@ void template_colorpicker_palette(Layout *layout, PointerRNA *ptr, const StringR
                                  0.0,
                                  TIP_("Delete active color from palette"));
   button_func_set(del_but, ui_colorpicker_palette_delete_cb, del_but, block);
+  /* Disable BUT_ICON_LEFT flag to center icon instead of left-aligning */
+  button_drawflag_disable(del_but, BUT_ICON_LEFT);
   
   /* Size toggle button */
   const int size_icon = palette_large_buttons ? ICON_FULLSCREEN_EXIT : ICON_FULLSCREEN_ENTER;
@@ -138,6 +142,8 @@ void template_colorpicker_palette(Layout *layout, PointerRNA *ptr, const StringR
                                   size_tooltip);
                                    
   button_func_set(size_but, ui_colorpicker_palette_size_toggle_cb, size_but, block);
+  /* Disable BUT_ICON_LEFT flag to center icon instead of left-aligning */
+  button_drawflag_disable(size_but, BUT_ICON_LEFT);
 
   /* Color grid */
   const float button_size = palette_large_buttons ? (UI_UNIT_X * 1.8f) : UI_UNIT_X;
