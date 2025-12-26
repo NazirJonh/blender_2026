@@ -74,12 +74,16 @@ void template_colorpicker_palette(Layout *layout, PointerRNA *ptr, const StringR
   }
 
   PanelLayout panel = layout->panel(C, "color_picker_palette", false);
+  printf("[DEBUG] template_colorpicker_palette: Created panel, header=%p, body=%p\n",
+         panel.header, panel.body);
   panel.header->label(IFACE_("Palette"), ICON_NONE);
   
   /* Only show content if panel is open */
   if (!panel.body) {
+    printf("[DEBUG] template_colorpicker_palette: Panel body is null, returning\n");
     return;
   }
+  printf("[DEBUG] template_colorpicker_palette: Panel body is not null, continuing\n");
 
   /* Color controls row */
   Layout *col = &panel.body->column(true);

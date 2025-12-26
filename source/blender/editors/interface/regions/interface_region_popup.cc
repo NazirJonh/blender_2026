@@ -22,10 +22,14 @@
 #include "BLI_listbase.h"
 #include "BLI_math_vector.h"
 #include "BLI_rect.h"
+#include "BLI_set.hh"
 #include "BLI_utildefines.h"
+#include "BLI_vector.hh"
 
 #include "BKE_context.hh"
 #include "BKE_screen.hh"
+
+#include "RNA_access.hh"
 
 #include "WM_api.hh"
 #include "WM_types.hh"
@@ -36,6 +40,164 @@
 #include "interface_regions_intern.hh"
 
 namespace blender::ui {
+
+static Vector<Button *> popup_layout_panels_collect_header_buttons(const Block &block)
+{
+  Vector<Button *> header_buttons;
+  for (const std::unique_ptr<Button> &bt : block.buttons) {
+    if (bt->flag2 & BUT2_IS_PANEL_HEADER) {
+      header_buttons.append(bt.get());
+    }
+  }
+
+  std::sort(header_buttons.begin(), header_buttons.end(), [](Button *a, Button *b) {
+    if (a->rect.ymax != b->rect.ymax) {
+      return a->rect.ymax > b->rect.ymax;
+    }
+    if (a->rect.ymin != b->rect.ymin) {
+      return a->rect.ymin > b->rect.ymin;
+    }
+    if (a->rect.xmin != b->rect.xmin) {
+      return a->rect.xmin < b->rect.xmin;
+    }
+    return a->rect.xmax < b->rect.xmax;
+  });
+
+  if (header_buttons.is_empty()) {
+    return header_buttons;
+  }
+
+  Vector<Button *> unique_buttons;
+  unique_buttons.reserve(header_buttons.size());
+  for (Button *but : header_buttons) {
+    if (unique_buttons.is_empty()) {
+      unique_buttons.append(but);
+      continue;
+    }
+
+    Button *last = unique_buttons.last();
+    if (but == last) {
+      continue;
+    }
+    if (but->rect.xmin == last->rect.xmin && but->rect.xmax == last->rect.xmax &&
+        but->rect.ymin == last->rect.ymin && but->rect.ymax == last->rect.ymax)
+    {
+      continue;
+    }
+    unique_buttons.append(but);
+  }
+  return unique_buttons;
+}
+
+static Vector<Button *> popup_layout_panels_collect_content_buttons(const Block &block)
+{
+  Vector<Button *> content_buttons;
+  for (const std::unique_ptr<Button> &bt : block.buttons) {
+    if (bt->flag2 & BUT2_IS_PANEL_HEADER) {
+      continue;
+    }
+    content_buttons.append(bt.get());
+  }
+  return content_buttons;
+}
+
+static bool popup_layout_panel_header_is_open(const LayoutPanelHeader &header)
+{
+  PointerRNA open_owner_ptr = header.open_owner_ptr;
+  if (!open_owner_ptr.data || header.open_prop_name.empty()) {
+    return false;
+  }
+  PropertyRNA *prop = RNA_struct_find_property(&open_owner_ptr, header.open_prop_name.c_str());
+  if (!prop) {
+    return false;
+  }
+  return RNA_property_boolean_get(&open_owner_ptr, prop);
+}
+
+static void popup_layout_panels_refresh_from_buttons(Panel &panel, const Block &block)
+{
+  LayoutPanels &layout_panels = panel.runtime->layout_panels;
+
+  Vector<Button *> header_buttons = popup_layout_panels_collect_header_buttons(block);
+  if (header_buttons.is_empty()) {
+    return;
+  }
+
+  const float offset = style_get_dpi()->panelspace;
+
+  Vector<LayoutPanelHeader> new_headers = layout_panels.headers;
+  if (new_headers.size() > header_buttons.size()) {
+    new_headers.resize(header_buttons.size());
+  }
+  for (int i = int(new_headers.size()); i < int(header_buttons.size()); i++) {
+    PointerRNA dummy_ptr;
+    dummy_ptr.data = nullptr;
+    dummy_ptr.type = nullptr;
+    new_headers.append({0.0f, 0.0f, dummy_ptr, ""});
+  }
+
+  for (const int i : new_headers.index_range()) {
+    Button *but = header_buttons[i];
+    new_headers[i].start_y = float(but->rect.ymin - block.rect.ymax - offset);
+    new_headers[i].end_y = float(but->rect.ymax - block.rect.ymax - offset);
+  }
+
+  Vector<int> open_header_indices;
+  open_header_indices.reserve(new_headers.size());
+  for (const int i : new_headers.index_range()) {
+    if (popup_layout_panel_header_is_open(new_headers[i])) {
+      open_header_indices.append(i);
+    }
+  }
+
+  Vector<LayoutPanelBody> new_bodies = layout_panels.bodies;
+  if (new_bodies.size() > open_header_indices.size()) {
+    new_bodies.resize(open_header_indices.size());
+  }
+
+  if (!new_bodies.is_empty()) {
+    const Vector<Button *> content_buttons = popup_layout_panels_collect_content_buttons(block);
+
+    for (const int body_index : new_bodies.index_range()) {
+      const int header_index = open_header_indices[body_index];
+      Button *header_but = header_buttons[header_index];
+      Button *next_header_but = (header_index + 1 < header_buttons.size()) ?
+                                    header_buttons[header_index + 1] :
+                                    nullptr;
+
+      const float content_top_bound = header_but->rect.ymin;
+      const float content_bottom_bound = next_header_but ? next_header_but->rect.ymax : block.rect.ymin;
+
+      float body_top_y = header_but->rect.ymax;
+      float body_bottom_y = header_but->rect.ymin;
+
+      if (!next_header_but) {
+        /* If this is the last panel, extend the background to the bottom of the popup block. */
+        body_bottom_y = content_bottom_bound;
+      }
+
+      for (Button *but : content_buttons) {
+        if (but->rect.ymax > content_top_bound) {
+          continue;
+        }
+        if (but->rect.ymin < content_bottom_bound) {
+          continue;
+        }
+        body_top_y = std::max(body_top_y, but->rect.ymax);
+        body_bottom_y = std::min(body_bottom_y, but->rect.ymin);
+      }
+
+      new_bodies[body_index].end_y = float(body_top_y - block.rect.ymax);
+      new_bodies[body_index].start_y = float(body_bottom_y - block.rect.ymax);
+      if (new_bodies[body_index].end_y <= new_bodies[body_index].start_y) {
+        std::swap(new_bodies[body_index].end_y, new_bodies[body_index].start_y);
+      }
+    }
+  }
+
+  layout_panels.headers = std::move(new_headers);
+  layout_panels.bodies = std::move(new_bodies);
+}
 
 /* -------------------------------------------------------------------- */
 /** \name Utility Functions
@@ -825,43 +987,7 @@ Block *popup_block_refresh(bContext *C, PopupBlockHandle *handle, ARegion *butre
      * popup transformations. We recalculate coordinates from actual button positions here.
      * Header buttons are identified by the BUT2_IS_PANEL_HEADER flag, using order for matching headers with buttons. */
     if (block->panel) {
-      const float offset = style_get_dpi()->panelspace;
-      
-      /* Collect all header buttons from all blocks in the region.
-       * Header buttons are identified by the BUT2_IS_PANEL_HEADER flag. */
-      Vector<Button *> header_buttons;
-      LISTBASE_FOREACH (Block *, region_block, &region->runtime->uiblocks) {
-        for (const std::unique_ptr<Button> &bt : region_block->buttons) {
-          if (bt->flag2 & BUT2_IS_PANEL_HEADER) {
-            header_buttons.append(bt.get());
-          }
-        }
-      }
-      
-      printf("[DEBUG] popup_block_refresh: Found %zu header buttons with BUT2_IS_PANEL_HEADER flag for %zu headers\n",
-             header_buttons.size(), block->panel->runtime->layout_panels.headers.size());
-      
-      /* Match headers with buttons by order and recalculate coordinates */
-      const size_t num_headers = block->panel->runtime->layout_panels.headers.size();
-      for (size_t i = 0; i < num_headers && i < header_buttons.size(); i++) {
-        LayoutPanelHeader &header = block->panel->runtime->layout_panels.headers[i];
-        Button *but = header_buttons[i];
-        
-        const float old_start_y = header.start_y;
-        const float old_end_y = header.end_y;
-        
-        /* Recalculate coordinates from actual button position relative to block->rect.ymax */
-        header.start_y = float(but->rect.ymin - block->rect.ymax - offset);
-        header.end_y = float(but->rect.ymax - block->rect.ymax - offset);
-        
-        printf("[DEBUG] popup_block_refresh: Header %zu: [%.1f, %.1f] -> [%.1f, %.1f] from button ymin=%.1f, ymax=%.1f, block->rect.ymax=%.1f\n",
-               i, old_start_y, old_end_y, header.start_y, header.end_y, but->rect.ymin, but->rect.ymax, block->rect.ymax);
-      }
-      
-      if (header_buttons.size() < num_headers) {
-        printf("[DEBUG] popup_block_refresh: WARNING: Found only %zu header buttons for %zu headers!\n",
-               header_buttons.size(), num_headers);
-      }
+      popup_layout_panels_refresh_from_buttons(*block->panel, *block);
     }
     /* Popups can change size, fix scroll offset if a panel was closed. */
     float ymin = FLT_MAX;

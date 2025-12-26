@@ -2279,8 +2279,18 @@ static void ui_handle_layout_panel_header(
     region = CTX_wm_region(C);
   }
   ED_region_tag_redraw(region);
-  /* For popups, also tag for UI refresh to update layout when panel state changes */
+  /* For popups, also tag for UI refresh to update layout when panel state changes. */
   if (block_is_popup_any(block)) {
+    if (PopupBlockHandle *popup = block->handle) {
+      /* Reset prev_block_rect to force popup resize. */
+      BLI_rctf_init(&popup->prev_block_rect, 0, 0, 0, 0);
+
+      /* Set bounds type on current block for proper popup size recalculation. */
+      const_cast<Block *>(block)->bounds_type = BLOCK_BOUNDS_POPUP_MOUSE;
+
+      /* Set RETURN_UPDATE to trigger popup refresh. */
+      popup->menuretval = RETURN_UPDATE;
+    }
     ED_region_tag_refresh_ui(region);
   }
   WM_tooltip_clear(C, CTX_wm_window(C));

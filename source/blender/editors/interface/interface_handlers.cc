@@ -11997,6 +11997,15 @@ static int ui_handle_menus_recursive(bContext *C,
         }
         LayoutPanelHeader *header = layout_panel_header_under_mouse(*block->panel, my);
         if (header) {
+          /* Reset prev_block_rect to force popup resize. */
+          BLI_rctf_init(&menu->prev_block_rect, 0, 0, 0, 0);
+
+          /* Set RETURN_UPDATE to trigger popup refresh. */
+          menu->menuretval = RETURN_UPDATE;
+
+          /* Set bounds type on current block for proper popup size recalculation. */
+          block->bounds_type = BLOCK_BOUNDS_POPUP_MOUSE;
+
           ED_region_tag_redraw(menu->region);
           ED_region_tag_refresh_ui(menu->region);
           ARegion *prev_region_popup = CTX_wm_region_popup(C);
@@ -12496,6 +12505,23 @@ static int ui_popup_handler(bContext *C, const wmEvent *event, void *userdata)
 
     if (header) {
       printf("[DEBUG] ui_popup_handler: Found layout panel header! Toggling panel state\n");
+
+      /* Reset prev_block_rect to force popup resize. */
+      BLI_rctf_init(&menu->prev_block_rect, 0, 0, 0, 0);
+
+      /* Set RETURN_UPDATE to trigger popup refresh. */
+      menu->menuretval = RETURN_UPDATE;
+
+      /* Find the block that uses this panel to set its bounds type. */
+      if (menu->region->runtime) {
+        LISTBASE_FOREACH (Block *, search_block, &menu->region->runtime->uiblocks) {
+          if (search_block->panel && search_block->panel->runtime &&
+              !search_block->panel->runtime->layout_panels.headers.is_empty()) {
+            search_block->bounds_type = BLOCK_BOUNDS_POPUP_MOUSE;
+          }
+        }
+      }
+
       ED_region_tag_redraw(menu->region);
       ED_region_tag_refresh_ui(menu->region);
       ARegion *prev_region_popup = CTX_wm_region_popup(C);
