@@ -8707,6 +8707,22 @@ class VIEW3D_PT_paint_vertex_context_menu(Panel):
             slider=True,
         )
 
+        # Color Palette section
+        if capabilities.has_color:
+            settings = context.tool_settings.vertex_paint
+            layout.separator()
+
+            # Use collapsible panel for color palette section
+            header, body = layout.panel("vertex_paint_color_palette", default_closed=False)
+            header.label(text="Color Palette", icon='COLOR')
+
+            if body:
+                # Palette selector
+                body.template_ID(settings, "palette", new="palette.new")
+
+                if settings.palette:
+                    body.template_palette(settings, "palette", color=True)
+
 
 class VIEW3D_PT_paint_texture_context_menu(Panel):
     # Only for popover, these are dummy values.
@@ -8745,6 +8761,22 @@ class VIEW3D_PT_paint_texture_context_menu(Panel):
                 pressure_name="use_pressure_strength",
                 slider=True,
             )
+
+        # Color Palette section
+        if capabilities.has_color:
+            settings = context.tool_settings.image_paint
+            layout.separator()
+
+            # Use collapsible panel for color palette section
+            header, body = layout.panel("texture_paint_color_palette", default_closed=False)
+            header.label(text="Color Palette", icon='COLOR')
+
+            if body:
+                # Palette selector
+                body.template_ID(settings, "palette", new="palette.new")
+
+                if settings.palette:
+                    body.template_palette(settings, "palette", color=True)
 
 
 class VIEW3D_PT_paint_weight_context_menu(Panel):

@@ -12530,8 +12530,6 @@ static int ui_popup_handler(bContext *C, const wmEvent *event, void *userdata)
       CTX_wm_region_popup_set(C, prev_region_popup);
       retval = WM_UI_HANDLER_BREAK;
       layout_panel_clicked = true;
-    } else {
-      printf("[DEBUG] ui_popup_handler: No layout panel header found under mouse\n");
     }
   }
 
@@ -12541,40 +12539,59 @@ static int ui_popup_handler(bContext *C, const wmEvent *event, void *userdata)
 
   /* free if done, does not free handle itself */
   if (menu->menuretval) {
-    wmWindow *win = CTX_wm_window(C);
-    /* copy values, we have to free first (closes region) */
-    const PopupBlockHandle temp = *menu;
-    Block *block = region_runtime ? static_cast<Block *>(region_runtime->uiblocks.first) : nullptr;
-
-    /* set last pie event to allow chained pie spawning */
-    if (block && block->flag & BLOCK_PIE_MENU) {
-      win->pie_event_type_last = block->pie_data.event_type;
-      reset_pie = true;
-    }
-
-    popup_block_free(C, menu);
-    popup_handlers_remove(&win->runtime->modalhandlers, menu);
-    CTX_wm_region_popup_set(C, nullptr);
-
-#ifdef USE_DRAG_TOGGLE
-    {
-      WM_event_free_ui_handler_all(C,
-                                   &win->runtime->modalhandlers,
-                                   ui_handler_region_drag_toggle,
-                                   ui_handler_region_drag_toggle_remove);
-    }
-#endif
-
-    if ((temp.menuretval & RETURN_OK) || (temp.menuretval & RETURN_POPUP_OK)) {
-      if (temp.popup_func) {
-        temp.popup_func(C, temp.popup_arg, temp.retvalue);
+    /* Handle RETURN_UPDATE: refresh popup without closing it */
+    if (menu->menuretval & RETURN_UPDATE) {
+      /* Only refresh if the popup supports it */
+      if (menu->can_refresh) {
+        Button *but = menu->popup_create_vars.but;
+        ARegion *butregion = menu->popup_create_vars.butregion;
+        popup_block_refresh(C, menu, butregion, but);
+        /* Reset menuretval after refresh to prevent closing */
+        menu->menuretval = 0;
+        retval = WM_UI_HANDLER_BREAK;
+      }
+      else {
+        /* If refresh is not supported, clear the flag and continue */
+        menu->menuretval = 0;
       }
     }
-    else if (temp.cancel_func) {
-      temp.cancel_func(C, temp.popup_arg);
-    }
+    else {
+      /* Close popup for other return values (RETURN_OK, RETURN_CANCEL, etc.) */
+      wmWindow *win = CTX_wm_window(C);
+      /* copy values, we have to free first (closes region) */
+      const PopupBlockHandle temp = *menu;
+      Block *block = region_runtime ? static_cast<Block *>(region_runtime->uiblocks.first) : nullptr;
 
-    WM_event_add_mousemove(win);
+      /* set last pie event to allow chained pie spawning */
+      if (block && block->flag & BLOCK_PIE_MENU) {
+        win->pie_event_type_last = block->pie_data.event_type;
+        reset_pie = true;
+      }
+
+      popup_block_free(C, menu);
+      popup_handlers_remove(&win->runtime->modalhandlers, menu);
+      CTX_wm_region_popup_set(C, nullptr);
+
+#ifdef USE_DRAG_TOGGLE
+      {
+        WM_event_free_ui_handler_all(C,
+                                     &win->runtime->modalhandlers,
+                                     ui_handler_region_drag_toggle,
+                                     ui_handler_region_drag_toggle_remove);
+      }
+#endif
+
+      if ((temp.menuretval & RETURN_OK) || (temp.menuretval & RETURN_POPUP_OK)) {
+        if (temp.popup_func) {
+          temp.popup_func(C, temp.popup_arg, temp.retvalue);
+        }
+      }
+      else if (temp.cancel_func) {
+        temp.cancel_func(C, temp.popup_arg);
+      }
+
+      WM_event_add_mousemove(win);
+    }
   }
   else {
     /* Re-enable tool-tips */
