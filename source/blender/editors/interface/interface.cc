@@ -2266,18 +2266,19 @@ void block_draw(const bContext *C, Block *block)
   }
   /* Shared layout panel backdrop style between redo region and popups. */
   if (block->panel && ELEM(region->regiontype, RGN_TYPE_HUD, RGN_TYPE_TEMPORARY)) {
-    /* Custom color for layout panels in popups (RGBA format).
-     * Current values: R=0.2, G=0.3, B=0.33, A=0.05 (light blue-gray, very transparent).
-     * You can adjust these values to change the background color. */
-     float subpanel_backcolor[4]{0.2f, 0.3f, 0.33f, 0.05f};
-    
-    /* Alternative: Use theme color instead of hardcoded color */
-    // theme::get_color_4fv(TH_PANEL_SUB_BACK, subpanel_backcolor);
+    /* Use theme color for layout panels in popups. */
+    float subpanel_backcolor[4];
+    theme::get_color_4fv(TH_PANEL_SUB_BACK, subpanel_backcolor);
     
     const bTheme *btheme = theme::theme_get();
     const float aspect = block->panel->runtime->block->aspect;
     const float radius = btheme->tui.panel_roundness * U.widget_unit * 0.5f / aspect;
     draw_layout_panels_backdrop(region, block->panel, radius, subpanel_backcolor);
+    
+    /* Draw outline for layout panels to distinguish them on light backgrounds. */
+    float outline_color[4];
+    theme::get_color_4fv(TH_PANEL_OUTLINE, outline_color);
+    draw_layout_panels_outline(region, block->panel, radius, outline_color);
   }
 
   BLF_batch_draw_begin();

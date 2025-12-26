@@ -1129,6 +1129,10 @@ void draw_layout_panels_backdrop(const ARegion *region,
                                  const Panel *panel,
                                  const float radius,
                                  float subpanel_backcolor[4]);
+void draw_layout_panels_outline(const ARegion *region,
+                                const Panel *panel,
+                                const float radius,
+                                float outline_color[4]);
 void panel_drag_collapse_handler_add(const bContext *C, const bool was_open);
 void panel_tag_search_filter_match(Panel *panel);
 /** Toggles layout panel open state and returns the new state. */

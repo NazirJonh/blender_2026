@@ -1224,6 +1224,52 @@ void draw_layout_panels_backdrop(const ARegion *region,
   }
 }
 
+void draw_layout_panels_outline(const ARegion *region,
+                                const Panel *panel,
+                                const float radius,
+                                float outline_color[4])
+{
+  /* Draw outline for layout panels. */
+  if (outline_color[3] == 0.0f) {
+    return; /* No outline to draw. */
+  }
+
+  const float aspect = block_is_popup_any(panel->runtime->block) ? panel->runtime->block->aspect :
+                                                                   1.0f;
+
+  for (const LayoutPanelBody &body : panel->runtime->layout_panels.bodies) {
+
+    rctf panel_blockspace = panel->runtime->block->rect;
+    panel_blockspace.ymax = panel->runtime->block->rect.ymax + body.end_y;
+    panel_blockspace.ymin = panel->runtime->block->rect.ymax + body.start_y;
+
+    if (panel_blockspace.ymax <= panel->runtime->block->rect.ymin) {
+      /* Layout panels no longer fits in block rectangle, stop drawing outline. */
+      break;
+    }
+    if (panel_blockspace.ymin >= panel->runtime->block->rect.ymax) {
+      /* Skip layout panels that scrolled to the top of the block rectangle. */
+      continue;
+    }
+    /* If the layout panel is at the end of the root panel, it's bottom corners are rounded. */
+    const bool is_main_panel_end = panel_blockspace.ymin - panel->runtime->block->rect.ymin <
+                                   (10.0f / aspect);
+    if (is_main_panel_end) {
+      panel_blockspace.ymin = panel->runtime->block->rect.ymin;
+      draw_roundbox_corner_set(CNR_BOTTOM_RIGHT | CNR_BOTTOM_LEFT);
+    }
+    else {
+      draw_roundbox_corner_set(CNR_NONE);
+    }
+    panel_blockspace.ymax = std::min(panel_blockspace.ymax, panel->runtime->block->rect.ymax);
+
+    rcti panel_pixelspace = ui_to_pixelrect(region, panel->runtime->block, &panel_blockspace);
+    rctf panel_pixelspacef;
+    BLI_rctf_rcti_copy(&panel_pixelspacef, &panel_pixelspace);
+    draw_roundbox_4fv(&panel_pixelspacef, false, radius, outline_color);
+  }
+}
+
 static void panel_draw_softshadow(const rctf *box_rect,
                                   const int roundboxalign,
                                   const float radius,
