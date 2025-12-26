@@ -158,8 +158,11 @@ void template_colorpicker_palette(Layout *layout, PointerRNA *ptr, const StringR
   button_drawflag_disable(size_but, BUT_ICON_LEFT);
 
   /* Color grid */
-  const float button_size = palette_large_buttons ? (UI_UNIT_X * 1.8f) : UI_UNIT_X;
-  const int cols_per_row = std::max(int(panel.body->width() / button_size), 1);
+  const float base_button_size = palette_large_buttons ? (UI_UNIT_X * 1.8f) : UI_UNIT_X;
+  /* Calculate number of columns that fit exactly in the available width */
+  const int cols_per_row = std::max(int(panel.body->width() / base_button_size), 1);
+  /* Adjust button size to fill the width exactly when possible */
+  const float button_size = (cols_per_row > 1) ? (panel.body->width() / cols_per_row) : base_button_size;
 
   /* Check if palette has any colors */
   int color_count = BLI_listbase_count(&palette->colors);
