@@ -81,13 +81,13 @@ void template_colorpicker_palette(Layout *layout, PointerRNA *ptr, const StringR
   
   /* If no palette, show template_id selector in panel body */
   if (!cptr.data || !RNA_struct_is_a(cptr.type, &RNA_Palette)) {
-    template_id(panel.body, C, ptr, propname, "PALETTE_OT_new", nullptr, nullptr, 0, false, std::nullopt);
+    template_id_simple(panel.body, C, ptr, propname, "PALETTE_OT_new", nullptr, 0, std::nullopt);
     return;
   }
 
   /* Show palette selector with name, duplicate and delete options */
   /* Use custom unlink operator to refresh popup after unlink */
-  template_id(panel.body, C, ptr, propname, "PALETTE_OT_new", nullptr, "PALETTE_OT_unlink", 0, false, std::nullopt);
+  template_id_simple(panel.body, C, ptr, propname, "PALETTE_OT_new", "PALETTE_OT_unlink", 0, std::nullopt);
 
   Palette *palette = static_cast<Palette *>(cptr.data);
 
