@@ -1061,6 +1061,20 @@ static void block_colorpicker(bContext *C,
     bt->custom_data = cpicker;
   }
 
+  /* Add spacer between Hex and Palette */
+  yco -= UI_UNIT_Y * 0.5f;
+  uiDefBut(block,
+           ButtonType::Sepr,
+           "",
+           0,
+           yco,
+           picker_width,
+           short(UI_UNIT_Y * 0.5f),
+           nullptr,
+           0.0,
+           0.0,
+           std::nullopt);
+
   /* Add palette section */
   ui_colorpicker_palette(block, cpicker, from_but, picker_width, &yco, C);
 
