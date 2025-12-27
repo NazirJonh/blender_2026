@@ -272,6 +272,9 @@ enum {
    * buttons currently.
    */
   BUT2_FORCE_SEMI_MODAL_ACTIVE = 1 << 1,
+  /** Button is part of a layout panel header. Used to identify panel header buttons
+   * for coordinate recalculation in popups. */
+  BUT2_IS_PANEL_HEADER = 1 << 2,
 };
 
 /** #Button.dragflag */
@@ -2170,6 +2173,13 @@ void popup_handlers_add(bContext *C, ListBase *handlers, PopupBlockHandle *popup
 void popup_handlers_remove(ListBase *handlers, PopupBlockHandle *popup);
 void popup_handlers_remove_all(bContext *C, ListBase *handlers);
 
+/**
+ * Force a popup to refresh by resetting its previous block rect.
+ * This causes the popup to recalculate its size on the next redraw.
+ * \param region: The region containing the popup (must have regiondata set to PopupBlockHandle).
+ */
+void popup_block_force_refresh(ARegion *region);
+
 /* Module
  *
  * init and exit should be called before using this module. init_userdef must
@@ -2266,6 +2276,14 @@ void template_id(Layout *layout,
                  int filter = TEMPLATE_ID_FILTER_ALL,
                  bool live_icon = false,
                  std::optional<StringRef> text = std::nullopt);
+void template_id_simple(Layout *layout,
+                       const bContext *C,
+                       PointerRNA *ptr,
+                       StringRefNull propname,
+                       const char *newop,
+                       const char *unlinkop,
+                       int filter = TEMPLATE_ID_FILTER_ALL,
+                       std::optional<StringRef> text = std::nullopt);
 void template_id_browse(Layout *layout,
                         bContext *C,
                         PointerRNA *ptr,
@@ -2435,6 +2453,15 @@ void template_color_picker(Layout *layout,
                            bool lock_luminosity,
                            bool cubic);
 void template_palette(Layout *layout, PointerRNA *ptr, StringRefNull propname, bool colors);
+/**
+ * Enhanced color palette template with collapsible header, visual indicators, and improved UX.
+ * This is an enhanced version of template_palette with additional features like:
+ * - Collapsible header for space efficiency
+ * - Visual indicator for active color (triangle)
+ * - Size toggle for color swatches
+ * - Better integration with paint modes
+ */
+void template_colorpicker_palette(Layout *layout, PointerRNA *ptr, StringRefNull propname);
 void template_crypto_picker(Layout *layout, PointerRNA *ptr, StringRefNull propname, int icon);
 /**
  * TODO: for now, grouping of layers is determined by dividing up the length of

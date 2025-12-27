@@ -20,6 +20,7 @@
 #include "BKE_screen.hh"
 
 #include "UI_view2d.hh"
+#include "UI_interface_c.hh"
 
 #include "RNA_access.hh"
 
@@ -679,7 +680,9 @@ bool block_is_pie_menu(const Block *block)
 
 bool block_is_popup_any(const Block *block)
 {
-  return (block_is_menu(block) || block_is_popover(block) || block_is_pie_menu(block));
+  return (block_is_menu(block) || block_is_popover(block) || block_is_pie_menu(block) ||
+          /* Color picker popup has BLOCK_LOOP | BLOCK_KEEP_OPEN */
+          ((block->flag & BLOCK_LOOP) != 0));
 }
 
 static const Button *ui_but_next_non_separator(const Button *but)
@@ -773,7 +776,11 @@ Block *block_find_mouse_over(const ARegion *region, const wmEvent *event, bool o
 
 Button *region_find_active_but(ARegion *region)
 {
-  LISTBASE_FOREACH (Block *, block, &region->runtime->uiblocks) {
+  if (!region || !region->runtime) {
+    return nullptr;
+  }
+
+  LISTBASE_FOREACH_BACKWARD (Block *, block, &region->runtime->uiblocks) {
     Button *but = block_active_but_get(block);
     if (but) {
       return but;

@@ -19,6 +19,7 @@
 #include "BKE_packedFile.hh"
 
 #include "BLI_listbase.h"
+#include "BLI_rect.h"
 #include "BLI_string_search.hh"
 #include "BLI_string_utf8.h"
 
@@ -33,6 +34,7 @@
 #include "ED_id_management.hh"
 #include "ED_node.hh"
 #include "ED_object.hh"
+#include "ED_screen.hh"
 #include "ED_undo.hh"
 
 #include "RNA_access.hh"
@@ -67,9 +69,24 @@ static void template_ID_set_property_exec_fn(bContext *C, void *arg_template, vo
 
   /* ID */
   if (item) {
-    PointerRNA idptr = RNA_id_pointer_create(static_cast<ID *>(item));
+    ID *new_id = static_cast<ID *>(item);
+    PointerRNA idptr = RNA_id_pointer_create(new_id);
     RNA_property_pointer_set(&template_ui->ptr, template_ui->prop, idptr, nullptr);
     RNA_property_update(C, &template_ui->ptr, template_ui->prop);
+
+    ARegion *region_for_refresh = CTX_wm_region_popup(C);
+    if (region_for_refresh == nullptr) {
+      region_for_refresh = CTX_wm_region(C);
+    }
+
+    if (region_for_refresh && region_for_refresh->regiondata) {
+      PopupBlockHandle *popup = static_cast<PopupBlockHandle *>(region_for_refresh->regiondata);
+      if (popup && popup->can_refresh) {
+        BLI_rctf_init(&popup->prev_block_rect, 0, 0, 0, 0);
+        popup->menuretval |= RETURN_UPDATE;
+        ED_region_tag_refresh_ui(region_for_refresh);
+      }
+    }
   }
 }
 
@@ -1428,6 +1445,133 @@ static void template_ID(const bContext *C,
   block_align_end(block);
 }
 
+/* Simplified version of template_ID that only shows essential elements:
+ * - Browse/search field
+ * - Name edit field (if ID exists)
+ * - Add New button (if newop provided)
+ * - Unlink button (if unlinkop provided)
+ * Does NOT show: Display number, Fake User, Local/Override buttons, Open button, etc.
+ */
+static void template_ID_simple(const bContext *C,
+                               Layout &layout,
+                               TemplateID &template_ui,
+                               StructRNA *type,
+                               const char *newop,
+                               const char *unlinkop,
+                               const std::optional<StringRef> text)
+{
+  Button *but;
+  const bool editable = RNA_property_editable(&template_ui.ptr, template_ui.prop);
+
+  PointerRNA idptr = RNA_property_pointer_get(&template_ui.ptr, template_ui.prop);
+  ID *id = static_cast<ID *>(idptr.data);
+  ID *idfrom = template_ui.ptr.owner_id;
+
+  /* Allow operators to take the ID from context. */
+  layout.context_ptr_set("id", &idptr);
+
+  Block *block = layout.block();
+  block_align_begin(block);
+
+  if (idptr.type) {
+    type = idptr.type;
+  }
+
+  if (text && !text->is_empty()) {
+    /* Add label respecting the separated layout property split state. */
+    uiItemL_respect_property_split(&layout, *text, ICON_NONE);
+  }
+
+  /* Browse/search field */
+  template_add_button_search_menu(C,
+                                  layout,
+                                  block,
+                                  &template_ui.ptr,
+                                  template_ui.prop,
+                                  id_search_menu,
+                                  MEM_new<TemplateID>(__func__, template_ui),
+                                  TIP_(template_id_browse_tip(type)),
+                                  false, /* use_previews */
+                                  editable,
+                                  false, /* live_icon */
+                                  but_func_argN_free<TemplateID>,
+                                  but_func_argN_copy<TemplateID>);
+
+  /* Text button with name - only if ID exists */
+  if (id) {
+    char name[UI_MAX_NAME_STR];
+    const bool user_alert = (id->us <= 0);
+
+    int width = template_search_textbut_width(&idptr, RNA_struct_find_property(&idptr, "name"));
+
+    const int height = template_search_textbut_height();
+
+    name[0] = '\0';
+    but = uiDefButR(block,
+                    ButtonType::Text,
+                    name,
+                    0,
+                    0,
+                    width,
+                    height,
+                    &idptr,
+                    "name",
+                    -1,
+                    0,
+                    0,
+                    RNA_struct_ui_description(type));
+    /* Handle undo through the #template_id_cb set below. Default undo handling from the button
+     * code (see #ui_apply_but_undo) would not work here, as the new name is not yet applied to the
+     * ID. */
+    button_flag_disable(but, BUT_UNDO);
+    Main *bmain = CTX_data_main(C);
+    button_func_rename_full_set(
+        but, [bmain, id](std::string &new_name) { ED_id_rename(*bmain, *id, new_name); });
+    button_funcN_set(but,
+                     template_id_cb,
+                     MEM_new<TemplateID>(__func__, template_ui),
+                     POINTER_FROM_INT(UI_ID_RENAME),
+                     but_func_argN_free<TemplateID>,
+                     but_func_argN_copy<TemplateID>);
+    if (user_alert) {
+      button_flag_enable(but, BUT_REDALERT);
+    }
+  }
+
+  /* Add New button */
+  if (newop) {
+    template_id_def_new_but(
+        block, id, template_ui, type, newop, editable, false, false, UI_UNIT_X);
+  }
+
+  /* Unlink button */
+  if (id && unlinkop) {
+    but = uiDefIconButO(block,
+                        ButtonType::But,
+                        unlinkop,
+                        wm::OpCallContext::InvokeDefault,
+                        ICON_X,
+                        0,
+                        0,
+                        UI_UNIT_X,
+                        UI_UNIT_Y,
+                        std::nullopt);
+    /* so we can access the template from operators, font unlinking needs this */
+    button_funcN_set(but,
+                     template_id_cb,
+                     MEM_new<TemplateID>(__func__, template_ui),
+                     POINTER_FROM_INT(UI_ID_NOP),
+                     but_func_argN_free<TemplateID>,
+                     but_func_argN_copy<TemplateID>);
+
+    if ((idfrom && !ID_IS_EDITABLE(idfrom)) || !editable) {
+      button_flag_enable(but, BUT_DISABLED);
+    }
+  }
+
+  block_align_end(block);
+}
+
 ID *context_active_but_get_tab_ID(bContext *C)
 {
   Button *but = context_active_but_get(C);
@@ -1609,6 +1753,43 @@ void template_id(Layout *layout,
                  1.0f,
                  live_icon,
                  false);
+}
+
+void template_id_simple(Layout *layout,
+                        const bContext *C,
+                        PointerRNA *ptr,
+                        const StringRefNull propname,
+                        const char *newop,
+                        const char *unlinkop,
+                        int filter,
+                        const std::optional<StringRef> text)
+{
+  PropertyRNA *prop = RNA_struct_find_property(ptr, propname.c_str());
+
+  if (!prop || RNA_property_type(prop) != PROP_POINTER) {
+    RNA_warning(
+        "pointer property not found: %s.%s", RNA_struct_identifier(ptr->type), propname.c_str());
+    return;
+  }
+
+  TemplateID template_ui = {};
+  template_ui.ptr = *ptr;
+  template_ui.prop = prop;
+  template_ui.prv_rows = 0;
+  template_ui.prv_cols = 0;
+  template_ui.scale = 1.0f;
+  template_ui.filter = filter;
+
+  StructRNA *type = RNA_property_pointer_type(ptr, prop);
+  short idcode = RNA_type_to_ID_code(type);
+  template_ui.idcode = idcode;
+  template_ui.idlb = which_libbase(CTX_data_main(C), idcode);
+
+  /* create UI elements for this template */
+  if (template_ui.idlb) {
+    Layout &row = layout->row(true);
+    template_ID_simple(C, row, template_ui, type, newop, unlinkop, text);
+  }
 }
 
 void template_action(Layout *layout,

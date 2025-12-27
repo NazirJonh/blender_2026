@@ -297,3 +297,10 @@ classes = (
     UI_MT_list_item_context_menu,
     UI_MT_button_context_menu,
 )
+
+# Register enhanced color palette modules
+try:
+    from . import register_color_palette
+    register_color_palette.register()
+except ImportError as e:
+    print(f"Enhanced Color Palette modules not available: {e}")

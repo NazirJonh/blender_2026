@@ -22,10 +22,14 @@
 #include "BLI_listbase.h"
 #include "BLI_math_vector.h"
 #include "BLI_rect.h"
+#include "BLI_set.hh"
 #include "BLI_utildefines.h"
+#include "BLI_vector.hh"
 
 #include "BKE_context.hh"
 #include "BKE_screen.hh"
+
+#include "RNA_access.hh"
 
 #include "WM_api.hh"
 #include "WM_types.hh"
@@ -36,6 +40,228 @@
 #include "interface_regions_intern.hh"
 
 namespace blender::ui {
+
+static Vector<Button *> popup_layout_panels_collect_header_buttons(const Block &block)
+{
+  Vector<Button *> header_buttons;
+  for (const std::unique_ptr<Button> &bt : block.buttons) {
+    if (bt->flag2 & BUT2_IS_PANEL_HEADER) {
+      header_buttons.append(bt.get());
+    }
+  }
+
+  std::sort(header_buttons.begin(), header_buttons.end(), [](Button *a, Button *b) {
+    if (a->rect.ymax != b->rect.ymax) {
+      return a->rect.ymax > b->rect.ymax;
+    }
+    if (a->rect.ymin != b->rect.ymin) {
+      return a->rect.ymin > b->rect.ymin;
+    }
+    if (a->rect.xmin != b->rect.xmin) {
+      return a->rect.xmin < b->rect.xmin;
+    }
+    return a->rect.xmax < b->rect.xmax;
+  });
+
+  if (header_buttons.is_empty()) {
+    return header_buttons;
+  }
+
+  Vector<Button *> unique_buttons;
+  unique_buttons.reserve(header_buttons.size());
+  for (Button *but : header_buttons) {
+    if (unique_buttons.is_empty()) {
+      unique_buttons.append(but);
+      continue;
+    }
+
+    Button *last = unique_buttons.last();
+    if (but == last) {
+      continue;
+    }
+    if (but->rect.xmin == last->rect.xmin && but->rect.xmax == last->rect.xmax &&
+        but->rect.ymin == last->rect.ymin && but->rect.ymax == last->rect.ymax)
+    {
+      continue;
+    }
+    unique_buttons.append(but);
+  }
+  return unique_buttons;
+}
+
+static Vector<Button *> popup_layout_panels_collect_content_buttons(const Block &block)
+{
+  Vector<Button *> content_buttons;
+  for (const std::unique_ptr<Button> &bt : block.buttons) {
+    if (bt->flag2 & BUT2_IS_PANEL_HEADER) {
+      continue;
+    }
+    content_buttons.append(bt.get());
+  }
+  return content_buttons;
+}
+
+static bool popup_layout_panel_header_is_open(const LayoutPanelHeader &header)
+{
+  PointerRNA open_owner_ptr = header.open_owner_ptr;
+  if (!open_owner_ptr.data || header.open_prop_name.empty()) {
+    return false;
+  }
+  PropertyRNA *prop = RNA_struct_find_property(&open_owner_ptr, header.open_prop_name.c_str());
+  if (!prop) {
+    return false;
+  }
+  return RNA_property_boolean_get(&open_owner_ptr, prop);
+}
+
+static void popup_layout_panels_refresh_from_buttons(Panel &panel, const Block &block)
+{
+  LayoutPanels &layout_panels = panel.runtime->layout_panels;
+
+  Vector<Button *> header_buttons = popup_layout_panels_collect_header_buttons(block);
+  if (header_buttons.is_empty()) {
+    return;
+  }
+
+  Vector<LayoutPanelHeader> new_headers = layout_panels.headers;
+  if (new_headers.size() > header_buttons.size()) {
+    new_headers.resize(header_buttons.size());
+  }
+  for (int i = int(new_headers.size()); i < int(header_buttons.size()); i++) {
+    PointerRNA dummy_ptr;
+    dummy_ptr.data = nullptr;
+    dummy_ptr.type = nullptr;
+    new_headers.append({0.0f, 0.0f, dummy_ptr, ""});
+  }
+
+  /* Calculate coordinates relative to block->rect.ymax, accounting for aspect ratio.
+   * Coordinates need to be in layout space (before aspect scaling) for proper matching. */
+  const float aspect = (block.aspect != 0.0f && block.aspect != 1.0f) ? block.aspect : 1.0f;
+  
+  /* First, determine which panels are open/closed to decide whether to recalculate coordinates */
+  Vector<int> open_header_indices;
+  open_header_indices.reserve(new_headers.size());
+  for (const int i : new_headers.index_range()) {
+    if (popup_layout_panel_header_is_open(new_headers[i])) {
+      open_header_indices.append(i);
+    }
+  }
+  
+  /* Recalculate header coordinates from button positions.
+   * For closed panels: preserve existing coordinates to avoid drift after block_translate.
+   * For open panels: always recalculate as they will be aligned with body coordinates later. */
+  for (const int i : new_headers.index_range()) {
+    const bool is_open = std::find(open_header_indices.begin(), open_header_indices.end(), i) != open_header_indices.end();
+    
+    if (is_open) {
+      /* Panel is open - recalculate from button (will be aligned with body later) */
+      Button *but = header_buttons[i];
+      /* Button coordinates are in window space, convert to layout space by dividing by aspect */
+      float start_y = float(but->rect.ymin - block.rect.ymax) / aspect;
+      float end_y = float(but->rect.ymax - block.rect.ymax) / aspect;
+      new_headers[i].start_y = start_y;
+      new_headers[i].end_y = end_y;
+    }
+    else {
+      /* Panel is closed - recalculate coordinates from button positions.
+       * Coordinates from resolve_impl are set when block->rect.ymax=0.0, so they need
+       * to be recalculated when block is actually placed (block->rect.ymax != 0.0).
+       * After block_translate, coordinates are preserved to avoid drift. */
+      Button *but = header_buttons[i];
+      float start_y = float(but->rect.ymin - block.rect.ymax) / aspect;
+      float end_y = float(but->rect.ymax - block.rect.ymax) / aspect;
+      
+      /* Check if coordinates need to be recalculated:
+       * - If block->rect.ymax is 0.0, block is not yet placed, preserve coordinates
+       * - If coordinates are from resolve_impl (very large negative values like -329.0, -291.0), recalculate
+       * - If coordinates match current button positions (within tolerance), they're already correct, preserve
+       * - Otherwise, preserve to avoid drift after block_translate */
+      const bool block_not_placed = (block.rect.ymax == 0.0f);
+      const bool coords_from_resolve = (new_headers[i].start_y < -200.0f || new_headers[i].end_y < -200.0f);
+      const float coord_tolerance = 5.0f; /* Allow small differences due to rounding */
+      const bool coords_match_button = (std::abs(new_headers[i].start_y - start_y) < coord_tolerance &&
+                                        std::abs(new_headers[i].end_y - end_y) < coord_tolerance);
+      
+      if (block_not_placed) {
+        /* Block not yet placed - preserve coordinates */
+      }
+      else if (coords_from_resolve) {
+        /* Coordinates from resolve_impl (set when block->rect.ymax=0.0) - recalculate from button */
+        new_headers[i].start_y = start_y;
+        new_headers[i].end_y = end_y;
+      }
+      else if (coords_match_button) {
+        /* Coordinates already match button positions - preserve to avoid drift after block_translate */
+      }
+      else {
+        /* Coordinates don't match - recalculate (first time after block placement) */
+        new_headers[i].start_y = start_y;
+        new_headers[i].end_y = end_y;
+      }
+    }
+  }
+
+  Vector<LayoutPanelBody> new_bodies = layout_panels.bodies;
+  if (new_bodies.size() > open_header_indices.size()) {
+    new_bodies.resize(open_header_indices.size());
+  }
+
+  if (!new_bodies.is_empty()) {
+    const Vector<Button *> content_buttons = popup_layout_panels_collect_content_buttons(block);
+
+    for (const int body_index : new_bodies.index_range()) {
+      const int header_index = open_header_indices[body_index];
+      Button *header_but = header_buttons[header_index];
+      Button *next_header_but = (header_index + 1 < header_buttons.size()) ?
+                                    header_buttons[header_index + 1] :
+                                    nullptr;
+
+      const float content_top_bound = header_but->rect.ymin;
+      const float content_bottom_bound = next_header_but ? next_header_but->rect.ymax : block.rect.ymin;
+
+      float body_top_y = header_but->rect.ymax;
+      float body_bottom_y = header_but->rect.ymin;
+
+      if (!next_header_but) {
+        /* If this is the last panel, extend the background to the bottom of the popup block. */
+        body_bottom_y = content_bottom_bound;
+      }
+
+      for (Button *but : content_buttons) {
+        if (but->rect.ymax > content_top_bound) {
+          continue;
+        }
+        if (but->rect.ymin < content_bottom_bound) {
+          continue;
+        }
+        body_top_y = std::max(body_top_y, but->rect.ymax);
+        body_bottom_y = std::min(body_bottom_y, but->rect.ymin);
+      }
+
+      /* Convert to layout space by dividing by aspect ratio */
+      new_bodies[body_index].end_y = float(body_top_y - block.rect.ymax) / aspect;
+      new_bodies[body_index].start_y = float(body_bottom_y - block.rect.ymax) / aspect;
+      if (new_bodies[body_index].end_y <= new_bodies[body_index].start_y) {
+        std::swap(new_bodies[body_index].end_y, new_bodies[body_index].start_y);
+      }
+    }
+  }
+
+  /* Align header coordinates with body coordinates for consistent hit testing.
+   * Headers should be clickable in the same visual area as their corresponding bodies.
+   * BUT: Only align when body exists (panel is open). For closed panels, keep original header coordinates. */
+  for (size_t i = 0; i < new_headers.size(); ++i) {
+    /* Only align header coordinates with body coordinates when panel is open (body exists for this header) */
+    if (i < new_bodies.size() && new_bodies[i].start_y != new_bodies[i].end_y) {
+      /* Body exists and is not empty - align header with body */
+      new_headers[i].start_y = new_bodies[i].start_y;
+      new_headers[i].end_y = new_bodies[i].end_y;
+    }
+  }
+
+  layout_panels.headers = std::move(new_headers);
+  layout_panels.bodies = std::move(new_bodies);
+}
 
 /* -------------------------------------------------------------------- */
 /** \name Utility Functions
@@ -129,18 +355,9 @@ static void ui_popup_block_position(wmWindow *window,
 
   block_to_window_rctf(butregion, but->block, &block->rect, &block->rect);
 
-  /* `block->rect` is already scaled with `butregion->winrct`,
-   * apply this scale to layout panels too. */
-  if (Panel *panel = block->panel) {
-    for (LayoutPanelBody &body : panel->runtime->layout_panels.bodies) {
-      body.start_y /= block->aspect;
-      body.end_y /= block->aspect;
-    }
-    for (LayoutPanelHeader &header : panel->runtime->layout_panels.headers) {
-      header.start_y /= block->aspect;
-      header.end_y /= block->aspect;
-    }
-  }
+  /* Note: Layout panel coordinates are recalculated in popup_layout_panels_refresh_from_buttons
+   * (called from popup_block_refresh) based on actual button positions, accounting for aspect ratio.
+   * We don't need to scale them here because they will be recalculated. */
 
   /* Compute direction relative to button, based on available space. */
   const int size_x = BLI_rctf_size_x(&block->rect) + 0.2f * UI_UNIT_X; /* 4 for shadow */
@@ -598,13 +815,20 @@ void layout_panel_popup_scroll_apply(Panel *panel, const float dy)
   if (!panel || dy == 0.0f) {
     return;
   }
+  /* Coordinates in layout_panels are in layout space (divided by aspect).
+   * When buttons are scrolled by `dy` in window space, coordinates in layout space
+   * need to be adjusted by `dy / aspect` to maintain correct relative positions. */
+  const Block *block = panel->runtime->block;
+  const float aspect = (block && block->aspect != 0.0f && block->aspect != 1.0f) ? block->aspect : 1.0f;
+  const float dy_layout = dy / aspect;
+  
   for (LayoutPanelBody &body : panel->runtime->layout_panels.bodies) {
-    body.start_y += dy;
-    body.end_y += dy;
+    body.start_y += dy_layout;
+    body.end_y += dy_layout;
   }
-  for (LayoutPanelHeader &headcer : panel->runtime->layout_panels.headers) {
-    headcer.start_y += dy;
-    headcer.end_y += dy;
+  for (LayoutPanelHeader &header : panel->runtime->layout_panels.headers) {
+    header.start_y += dy_layout;
+    header.end_y += dy_layout;
   }
 }
 
@@ -620,6 +844,8 @@ void popup_dummy_panel_set(ARegion *region, Block *block)
     }();
     panel = BKE_panel_new(&panel_type);
   }
+  panel->ofsx = 0;
+  panel->ofsy = 0;
   panel->runtime->layout_panels.clear();
   block->panel = panel;
   panel->runtime->block = block;
@@ -841,6 +1067,15 @@ Block *popup_block_refresh(bContext *C, PopupBlockHandle *handle, ARegion *butre
   }
   /* Apply popup scroll offset to layout panels. */
   layout_panel_popup_scroll_apply(block->panel, handle->scrolloffset);
+  
+  /* Recalculate layout panel header coordinates from actual button positions AFTER all transformations
+   * (block_translate and scroll offset application). Layout panel coordinates are calculated relative
+   * to block->rect.ymax, which changes during popup transformations. We recalculate coordinates
+   * from actual button positions here to ensure they match the final button positions.
+   * Header buttons are identified by the BUT2_IS_PANEL_HEADER flag, using order for matching headers with buttons. */
+  if (block->panel) {
+    popup_layout_panels_refresh_from_buttons(*block->panel, *block);
+  }
 
   if (block_old) {
     block->oldblock = block_old;
@@ -964,12 +1199,16 @@ PopupBlockHandle *popup_block_create(bContext *C,
 
 void popup_block_free(bContext *C, PopupBlockHandle *handle)
 {
+  if (handle == nullptr) {
+    return;
+  }
+
   bool is_submenu = false;
 
   /* If this popup is created from a popover which does NOT have keep-open flag set,
    * then close the popover too. We could extend this to other popup types too. */
   ARegion *region = handle->popup_create_vars.butregion;
-  if (region != nullptr) {
+  if (region != nullptr && region->runtime != nullptr) {
     LISTBASE_FOREACH (Block *, block, &region->runtime->uiblocks) {
       if (block->handle && (block->flag & BLOCK_POPOVER) && (block->flag & BLOCK_KEEP_OPEN) == 0) {
         PopupBlockHandle *menu = block->handle;
@@ -991,11 +1230,16 @@ void popup_block_free(bContext *C, PopupBlockHandle *handle)
     handle->popup_create_vars.arg_free(handle->popup_create_vars.arg);
   }
 
-  if (handle->region->runtime->popup_block_panel) {
-    BKE_panel_free(handle->region->runtime->popup_block_panel);
+  if (handle->region != nullptr && handle->region->runtime != nullptr) {
+    if (handle->region->runtime->popup_block_panel) {
+      BKE_panel_free(handle->region->runtime->popup_block_panel);
+      handle->region->runtime->popup_block_panel = nullptr;
+    }
   }
 
-  ui_popup_block_remove(C, handle);
+  if (handle->region != nullptr) {
+    ui_popup_block_remove(C, handle);
+  }
 
   MEM_delete(handle);
 }
@@ -1135,6 +1379,45 @@ void alert(bContext *C,
   data->mouse_move_quit = compact;
 
   popup_block_ex(C, ui_alert_create, ui_alert_ok, ui_alert_cancel, data, nullptr);
+}
+
+/** \} */
+
+/* -------------------------------------------------------------------- */
+/** \name Popup Block Force Refresh
+ * \{ */
+
+void popup_block_force_refresh(ARegion *region)
+{
+  if (!region || !region->regiondata) {
+    return;
+  }
+
+  PopupBlockHandle *popup = static_cast<PopupBlockHandle *>(region->regiondata);
+  if (popup && popup->can_refresh) {
+    /* Reset prev_block_rect to force popup resize.
+     * This matches the pattern used in ui_handle_layout_panel_header and
+     * ui_handle_menus_recursive for popup resizing. */
+    BLI_rctf_init(&popup->prev_block_rect, 0, 0, 0, 0);
+
+    /* Set RETURN_UPDATE to trigger popup refresh.
+     * This signals the event handler to call popup_block_refresh. */
+    popup->menuretval = RETURN_UPDATE;
+
+    /* Tag region for redraw and refresh UI - use the region passed to the function,
+     * which should be the popup region itself */
+    ED_region_tag_redraw(region);
+    ED_region_tag_refresh_ui(region);
+  }
+  else {
+    /* Debug: log if refresh cannot be performed */
+    if (!popup) {
+      printf("[DEBUG] popup_block_force_refresh: popup is null\n");
+    }
+    else if (!popup->can_refresh) {
+      printf("[DEBUG] popup_block_force_refresh: popup->can_refresh is false\n");
+    }
+  }
 }
 
 /** \} */

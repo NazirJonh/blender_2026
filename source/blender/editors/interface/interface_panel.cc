@@ -1187,15 +1187,29 @@ void draw_layout_panels_backdrop(const ARegion *region,
                                  const float radius,
                                  float subpanel_backcolor[4])
 {
-  /* Draw backdrops for layout panels. */
-  const float aspect = block_is_popup_any(panel->runtime->block) ? panel->runtime->block->aspect :
-                                                                   1.0f;
+  /* Calculate aspect ratio, accounting for view2d zoom in regions with view2d.
+   * For popups, use the same calculation as in popup_layout_panels_refresh_from_buttons.
+   * For regions with view2d, use view2d zoom ratio. */
+  float aspect = 1.0f;
+  if (block_is_popup_any(panel->runtime->block)) {
+    /* Use the same calculation as in popup_layout_panels_refresh_from_buttons */
+    const float block_aspect = panel->runtime->block->aspect;
+    aspect = (block_aspect != 0.0f && block_aspect != 1.0f) ? block_aspect : 1.0f;
+  }
+  else if (region->v2d.flag & V2D_IS_INIT) {
+    /* Account for view2d zoom (e.g., in Shader Editor, Image Editor, etc.) */
+    aspect = BLI_rctf_size_y(&region->v2d.cur) / (BLI_rcti_size_y(&region->v2d.mask) + 1);
+  }
 
-  for (const LayoutPanelBody &body : panel->runtime->layout_panels.bodies) {
+  /* Draw backdrop for open panels (using body coordinates) */
+  for (const int body_index : panel->runtime->layout_panels.bodies.index_range()) {
+    const LayoutPanelBody &body = panel->runtime->layout_panels.bodies[body_index];
 
     rctf panel_blockspace = panel->runtime->block->rect;
-    panel_blockspace.ymax = panel->runtime->block->rect.ymax + body.end_y;
-    panel_blockspace.ymin = panel->runtime->block->rect.ymax + body.start_y;
+    /* body.start_y and body.end_y are in layout space (divided by aspect in popup_layout_panels_refresh_from_buttons),
+     * convert to window space by multiplying by aspect */
+    panel_blockspace.ymax = panel->runtime->block->rect.ymax + body.end_y * aspect;
+    panel_blockspace.ymin = panel->runtime->block->rect.ymax + body.start_y * aspect;
 
     if (panel_blockspace.ymax <= panel->runtime->block->rect.ymin) {
       /* Layout panels no longer fits in block rectangle, stop drawing backdrops. */
@@ -1221,6 +1235,71 @@ void draw_layout_panels_backdrop(const ARegion *region,
     rctf panel_pixelspacef;
     BLI_rctf_rcti_copy(&panel_pixelspacef, &panel_pixelspace);
     draw_roundbox_4fv(&panel_pixelspacef, true, radius, subpanel_backcolor);
+  }
+
+  /* Note: We don't draw backdrop for closed panels - only for open panels with bodies.
+   * Closed panels should not have a background, only the header button is visible. */
+}
+
+void draw_layout_panels_outline(const ARegion *region,
+                                const Panel *panel,
+                                const float radius,
+                                float outline_color[4])
+{
+  /* Draw outline for layout panels. */
+  if (outline_color[3] == 0.0f) {
+    return; /* No outline to draw. */
+  }
+
+  /* Calculate aspect ratio, accounting for view2d zoom in regions with view2d.
+   * For popups, use the same calculation as in popup_layout_panels_refresh_from_buttons.
+   * For regions with view2d, use view2d zoom ratio. */
+  float aspect = 1.0f;
+  if (block_is_popup_any(panel->runtime->block)) {
+    /* Use the same calculation as in popup_layout_panels_refresh_from_buttons */
+    const float block_aspect = panel->runtime->block->aspect;
+    aspect = (block_aspect != 0.0f && block_aspect != 1.0f) ? block_aspect : 1.0f;
+  }
+  else if (region->v2d.flag & V2D_IS_INIT) {
+    /* Account for view2d zoom (e.g., in Shader Editor, Image Editor, etc.) */
+    aspect = BLI_rctf_size_y(&region->v2d.cur) / (BLI_rcti_size_y(&region->v2d.mask) + 1);
+  }
+
+  for (const int body_index : panel->runtime->layout_panels.bodies.index_range()) {
+    const LayoutPanelBody &body = panel->runtime->layout_panels.bodies[body_index];
+
+    rctf panel_blockspace = panel->runtime->block->rect;
+    /* body.start_y and body.end_y are in layout space (divided by aspect in popup_layout_panels_refresh_from_buttons),
+     * convert to window space by multiplying by aspect */
+    panel_blockspace.ymax = panel->runtime->block->rect.ymax + body.end_y * aspect;
+    panel_blockspace.ymin = panel->runtime->block->rect.ymax + body.start_y * aspect;
+
+    if (panel_blockspace.ymax <= panel->runtime->block->rect.ymin) {
+      /* Layout panels no longer fits in block rectangle, stop drawing outline. */
+      break;
+    }
+    if (panel_blockspace.ymin >= panel->runtime->block->rect.ymax) {
+      /* Skip layout panels that scrolled to the top of the block rectangle. */
+      continue;
+    }
+    /* If the layout panel is at the end of the root panel, it's bottom corners are rounded. */
+    const bool is_main_panel_end = panel_blockspace.ymin - panel->runtime->block->rect.ymin <
+                                   (10.0f / aspect);
+    if (is_main_panel_end) {
+      panel_blockspace.ymin = panel->runtime->block->rect.ymin;
+      draw_roundbox_corner_set(CNR_BOTTOM_RIGHT | CNR_BOTTOM_LEFT);
+    }
+    else {
+      draw_roundbox_corner_set(CNR_NONE);
+    }
+    panel_blockspace.ymax = std::min(panel_blockspace.ymax, panel->runtime->block->rect.ymax);
+
+    rcti panel_pixelspace = ui_to_pixelrect(region, panel->runtime->block, &panel_blockspace);
+    rctf panel_pixelspacef;
+    BLI_rctf_rcti_copy(&panel_pixelspacef, &panel_pixelspace);
+    
+    
+    draw_roundbox_4fv(&panel_pixelspacef, false, radius, outline_color);
   }
 }
 
@@ -2036,20 +2115,63 @@ static void ui_do_drag(const bContext *C, const wmEvent *event, Panel *panel)
 /** \name Region Level Panel Interaction
  * \{ */
 
-LayoutPanelHeader *layout_panel_header_under_mouse(const Panel &panel, const int my)
+LayoutPanelHeader *layout_panel_header_under_mouse(const Panel &panel, const int my, const ARegion *region)
 {
+  const Block *block = panel.runtime->block;
+  if (!block) {
+    return nullptr;
+  }
+
+  /* Calculate aspect ratio, accounting for view2d zoom in regions with view2d.
+   * For popups, use the same calculation as in popup_layout_panels_refresh_from_buttons.
+   * For regions with view2d, use view2d zoom ratio. */
+  float aspect = 1.0f;
+  if (block_is_popup_any(block)) {
+    /* Use the same calculation as in popup_layout_panels_refresh_from_buttons */
+    const float block_aspect = block->aspect;
+    aspect = (block_aspect != 0.0f && block_aspect != 1.0f) ? block_aspect : 1.0f;
+  }
+  else if (region && region->v2d.flag & V2D_IS_INIT) {
+    /* Account for view2d zoom (e.g., in Shader Editor, Image Editor, etc.) */
+    aspect = BLI_rctf_size_y(&region->v2d.cur) / (BLI_rcti_size_y(&region->v2d.mask) + 1);
+  }
+
+  /* Calculate relative_y in layout space.
+   * Headers are registered with coordinates: (but->rect.ymin - block->rect.ymax) / aspect
+   * So we need to use the same formula for mouse coordinates. */
+  float relative_y = float(my - block->rect.ymax);
+
+  if (aspect != 1.0f) {
+    relative_y /= aspect;
+  }
+
+  /* Check click against panel bodies first (for open panels), then headers (for closed panels).
+   * Visual layout uses body coordinates when panel is open, header coordinates when closed. */
+  for (const int i : panel.runtime->layout_panels.bodies.index_range()) {
+    const LayoutPanelBody &body = panel.runtime->layout_panels.bodies[i];
+    if (IN_RANGE(relative_y, body.start_y, body.end_y)) {
+      /* Return corresponding header */
+      if (i < panel.runtime->layout_panels.headers.size()) {
+        return &panel.runtime->layout_panels.headers[i];
+      }
+    }
+  }
+
+  /* For closed panels (no bodies), check headers directly using their original coordinates */
   for (LayoutPanelHeader &header : panel.runtime->layout_panels.headers) {
-    if (IN_RANGE(float(my - panel.runtime->block->rect.ymax), header.start_y, header.end_y)) {
+    if (IN_RANGE(relative_y, header.start_y, header.end_y)) {
       return &header;
     }
   }
+
   return nullptr;
 }
 
 static PanelMouseState ui_panel_mouse_state_get(const Block *block,
                                                 const Panel *panel,
                                                 const int mx,
-                                                const int my)
+                                                const int my,
+                                                const ARegion *region = nullptr)
 {
   if (!IN_RANGE(float(mx), block->rect.xmin, block->rect.xmax)) {
     return PANEL_MOUSE_OUTSIDE;
@@ -2058,7 +2180,7 @@ static PanelMouseState ui_panel_mouse_state_get(const Block *block,
   if (IN_RANGE(float(my), block->rect.ymax, block->rect.ymax + PNL_HEADER)) {
     return PANEL_MOUSE_INSIDE_HEADER;
   }
-  if (layout_panel_header_under_mouse(*panel, my) != nullptr) {
+  if (layout_panel_header_under_mouse(*panel, my, region) != nullptr) {
     return PANEL_MOUSE_INSIDE_LAYOUT_PANEL_HEADER;
   }
 
@@ -2112,14 +2234,21 @@ static void ui_panel_drag_collapse(const bContext *C,
       rect.ymax = block->rect.ymax + header.end_y;
 
       if (BLI_rctf_isect_segment(&rect, xy_a_block, xy_b_block)) {
-        RNA_boolean_set(
-            &header.open_owner_ptr, header.open_prop_name.c_str(), !dragcol_data->was_first_open);
-        RNA_property_update(
-            const_cast<bContext *>(C),
-            &header.open_owner_ptr,
-            RNA_struct_find_property(&header.open_owner_ptr, header.open_prop_name.c_str()));
-        ED_region_tag_redraw(region);
-        ED_region_tag_refresh_ui(region);
+        /* Check if header has valid open_owner_ptr before using it.
+         * Headers created for additional header buttons may have invalid pointers. */
+        if (header.open_owner_ptr.data && !header.open_prop_name.empty()) {
+          RNA_boolean_set(
+              &header.open_owner_ptr, header.open_prop_name.c_str(), !dragcol_data->was_first_open);
+          PropertyRNA *prop = RNA_struct_find_property(&header.open_owner_ptr, header.open_prop_name.c_str());
+          if (prop) {
+            RNA_property_update(
+                const_cast<bContext *>(C),
+                &header.open_owner_ptr,
+                prop);
+          }
+          ED_region_tag_redraw(region);
+          ED_region_tag_refresh_ui(region);
+        }
       }
     }
 
@@ -2207,13 +2336,25 @@ void panel_drag_collapse_handler_add(const bContext *C, const bool was_open)
 
 bool ui_layout_panel_toggle_open(const bContext *C, LayoutPanelHeader *header)
 {
+  /* Check if header has valid open_owner_ptr before using it.
+   * Headers created for additional header buttons may have invalid pointers. */
+  if (!header->open_owner_ptr.data || header->open_prop_name.empty()) {
+    return false;
+  }
+
   const bool is_open = RNA_boolean_get(&header->open_owner_ptr, header->open_prop_name.c_str());
+
   RNA_boolean_set(&header->open_owner_ptr, header->open_prop_name.c_str(), !is_open);
-  RNA_property_update(
-      const_cast<bContext *>(C),
-      &header->open_owner_ptr,
-      RNA_struct_find_property(&header->open_owner_ptr, header->open_prop_name.c_str()));
-  return !is_open;
+  const bool new_state = RNA_boolean_get(&header->open_owner_ptr, header->open_prop_name.c_str());
+
+  PropertyRNA *prop = RNA_struct_find_property(&header->open_owner_ptr, header->open_prop_name.c_str());
+  if (prop) {
+    RNA_property_update(
+        const_cast<bContext *>(C),
+        &header->open_owner_ptr,
+        prop);
+  }
+  return new_state;
 }
 
 static void ui_handle_layout_panel_header(
@@ -2222,12 +2363,30 @@ static void ui_handle_layout_panel_header(
   Panel *panel = block->panel;
   BLI_assert(panel->type != nullptr);
 
-  LayoutPanelHeader *header = layout_panel_header_under_mouse(*panel, my);
+  ARegion *region = CTX_wm_region_popup(C);
+  LayoutPanelHeader *header = layout_panel_header_under_mouse(*panel, my, region);
   if (header == nullptr) {
     return;
   }
   const bool new_state = ui_layout_panel_toggle_open(C, header);
-  ED_region_tag_redraw(CTX_wm_region(C));
+  if (!region) {
+    region = CTX_wm_region(C);
+  }
+  ED_region_tag_redraw(region);
+  /* For popups, also tag for UI refresh to update layout when panel state changes. */
+  if (block_is_popup_any(block)) {
+    if (PopupBlockHandle *popup = block->handle) {
+      /* Reset prev_block_rect to force popup resize. */
+      BLI_rctf_init(&popup->prev_block_rect, 0, 0, 0, 0);
+
+      /* Set bounds type on current block for proper popup size recalculation. */
+      const_cast<Block *>(block)->bounds_type = BLOCK_BOUNDS_POPUP_MOUSE;
+
+      /* Set RETURN_UPDATE to trigger popup refresh. */
+      popup->menuretval = RETURN_UPDATE;
+    }
+    ED_region_tag_refresh_ui(region);
+  }
   WM_tooltip_clear(C, CTX_wm_window(C));
 
   if (event_type == LEFTMOUSE) {
@@ -2249,7 +2408,10 @@ static void ui_handle_panel_header(const bContext *C,
                                    const bool shift)
 {
   Panel *panel = block->panel;
-  ARegion *region = CTX_wm_region(C);
+  ARegion *region = CTX_wm_region_popup(C);
+  if (!region) {
+    region = CTX_wm_region(C);
+  }
 
   BLI_assert(panel->type != nullptr);
   BLI_assert(!(panel->type->flag & PANEL_TYPE_NO_HEADER));
@@ -2307,6 +2469,9 @@ static void ui_handle_panel_header(const bContext *C,
     }
 
     set_panels_list_data_expand_flag(C, region);
+    if (block_is_popup_any(block)) {
+      ED_region_tag_refresh_ui(region);
+    }
     panel_activate_state(C, panel, PANEL_STATE_ANIMATION);
     return;
   }
@@ -2643,7 +2808,7 @@ int handler_panel_region(bContext *C,
     int my = event->xy[1];
     window_to_block(region, block, &mx, &my);
 
-    const PanelMouseState mouse_state = ui_panel_mouse_state_get(block, panel, mx, my);
+    const PanelMouseState mouse_state = ui_panel_mouse_state_get(block, panel, mx, my, region);
 
     if (has_panel_header && mouse_state != PANEL_MOUSE_OUTSIDE) {
       /* Mark panels that have been interacted with so their expansion
@@ -2840,7 +3005,10 @@ static void panel_activate_state(const bContext *C, Panel *panel, const HandlePa
 {
   HandlePanelData *data = static_cast<HandlePanelData *>(panel->activedata);
   wmWindow *win = CTX_wm_window(C);
-  ARegion *region = CTX_wm_region(C);
+  ARegion *region = CTX_wm_region_popup(C);
+  if (!region) {
+    region = CTX_wm_region(C);
+  }
 
   if (data != nullptr && data->state == state) {
     return;

@@ -3968,6 +3968,7 @@ void LayoutItemPanelHeader::estimate_impl()
 void LayoutItemPanelHeader::resolve_impl()
 {
   Panel *panel = this->root_panel();
+  Block *block = this->block();
 
   BLI_assert(this->items().size() == 1);
   Item *item = this->items().first();
@@ -3975,9 +3976,17 @@ void LayoutItemPanelHeader::resolve_impl()
   const int2 size = item->size();
   y_ -= size.y;
   ui_item_position(item, x_, y_, w_, size.y);
-  const float offset = style_get_dpi()->panelspace;
+  
+  /* Note: We don't search for buttons here because their coordinates are not yet set.
+   * Instead, we'll find them after all transformations in popup_block_refresh by their type
+   * (Label with ICON_RIGHTARROW or ICON_DOWNARROW_HLT) and use order for matching. */
+  const float start_y = float(y_);
+  const float end_y = float(y_ + h_);
   panel->runtime->layout_panels.headers.append(
-      {float(y_) - offset, float(y_ + h_) - offset, open_prop_owner, open_prop_name});
+      {start_y, end_y, open_prop_owner, open_prop_name});
+  
+  printf("[DEBUG] LayoutItemPanelHeader::resolve_impl: Registered header [%.1f, %.1f] for prop '%s' in panel=%p, block=%p (block->rect.ymax=%.1f)\n",
+         start_y, end_y, open_prop_name.c_str(), panel, block, block ? block->rect.ymax : 0.0f);
 }
 
 /* panel body layout */
@@ -3985,10 +3994,9 @@ void LayoutItemPanelBody::resolve_impl()
 {
   Panel *panel = this->root_panel();
   LayoutColumn::resolve_impl();
-  const float offset = style_get_dpi()->panelspace;
   panel->runtime->layout_panels.bodies.append({
-      float(y_ - space_) - offset,
-      float(y_ + h_ + space_) - offset,
+      float(y_ - space_),
+      float(y_ + h_ + space_),
   });
 }
 
@@ -4745,7 +4753,12 @@ PanelLayout Layout::panel_prop(const bContext *C,
     Block *block = row->block();
     const int icon = is_open ? ICON_DOWNARROW_HLT : ICON_RIGHTARROW;
     const int width = ui_text_icon_width(this, "", icon, false);
-    uiDefIconTextBut(block, ButtonType::Label, icon, "", 0, 0, width, UI_UNIT_Y, nullptr, "");
+    Button *header_but = uiDefIconTextBut(block, ButtonType::Label, icon, "", 0, 0, width, UI_UNIT_Y, nullptr, "");
+    
+    /* Mark this button as a panel header button for identification in popups. */
+    header_but->flag2 |= BUT2_IS_PANEL_HEADER;
+    printf("[DEBUG] panel_prop: Set BUT2_IS_PANEL_HEADER flag on button (icon=%d, flag2=0x%x)\n",
+           icon, header_but->flag2);
 
     panel_layout.header = row;
   }

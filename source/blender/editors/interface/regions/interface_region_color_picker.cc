@@ -9,33 +9,69 @@
  */
 
 #include <cstdarg>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
 #include "MEM_guardedalloc.h"
 
 #include "DNA_userdef_types.h"
+#include "DNA_brush_types.h"
+#include "DNA_scene_types.h"
 
 #include "BLI_listbase.h"
 #include "BLI_rect.h"
 #include "BLI_string_utf8.h"
 #include "BLI_utildefines.h"
+#include "BLI_math_vector.h"
+#include "BLI_math_vector_types.hh"
 
 #include "BKE_context.hh"
+#include "BKE_paint.hh"
+#include "BKE_paint_types.hh"
+#include "BKE_screen.hh"
 
 #include "UI_interface_c.hh"
+#include "UI_interface_layout.hh"
 #include "WM_api.hh"
 #include "WM_types.hh"
 
 #include "RNA_access.hh"
+#include "RNA_define.hh"
+#include "RNA_prototypes.hh"
 
 #include "BLT_translation.hh"
 
 #include "IMB_colormanagement.hh"
 
+#include "ED_screen.hh"
+
 #include "interface_intern.hh"
 
 namespace blender::ui {
+
+static void local_layout_panel_adjust_y(Panel *panel, const float dy)
+{
+  if (!panel || dy == 0.0f || !panel->runtime) {
+    return;
+  }
+  printf("[DEBUG] local_layout_panel_adjust_y: Adjusting panels by %.1f (dy=%.1f)\n", -dy, dy);
+  printf("[DEBUG] local_layout_panel_adjust_y: Before - headers=%zu, bodies=%zu\n",
+         panel->runtime->layout_panels.headers.size(),
+         panel->runtime->layout_panels.bodies.size());
+  for (LayoutPanelBody &body : panel->runtime->layout_panels.bodies) {
+    printf("[DEBUG] local_layout_panel_adjust_y: Body [%.1f, %.1f] -> ", body.start_y, body.end_y);
+    body.start_y -= dy;
+    body.end_y -= dy;
+    printf("[%.1f, %.1f]\n", body.start_y, body.end_y);
+  }
+  for (LayoutPanelHeader &header : panel->runtime->layout_panels.headers) {
+    printf("[DEBUG] local_layout_panel_adjust_y: Header [%.1f, %.1f] -> ", header.start_y, header.end_y);
+    header.start_y -= dy;
+    header.end_y -= dy;
+    printf("[%.1f, %.1f]\n", header.start_y, header.end_y);
+  }
+}
 
 enum ePickerType {
   PICKER_TYPE_RGB = 0,
@@ -620,8 +656,16 @@ static void ui_colorpicker_square(
   hsv_but->custom_data = cpicker;
 }
 
+/* Forward declaration */
+static void ui_colorpicker_palette(Block *block,
+                                   ColorPicker *cpicker,
+                                   Button *from_but,
+                                   int picker_width,
+                                   int *yco_ptr,
+                                   bContext *C);
+
 /* a HS circle, V slider, rgb/hsv/hex sliders */
-static void block_colorpicker(const bContext * /*C*/,
+static void block_colorpicker(bContext *C,
                               Block *block,
                               Button *from_but,
                               float rgba_scene_linear[4],
@@ -1017,7 +1061,101 @@ static void block_colorpicker(const bContext * /*C*/,
     bt->custom_data = cpicker;
   }
 
+  /* Add spacer between Hex and Palette */
+  yco -= UI_UNIT_Y * 0.5f;
+  uiDefBut(block,
+           ButtonType::Sepr,
+           "",
+           0,
+           yco,
+           picker_width,
+           short(UI_UNIT_Y * 0.5f),
+           nullptr,
+           0.0,
+           0.0,
+           std::nullopt);
+
+  /* Add palette section */
+  ui_colorpicker_palette(block, cpicker, from_but, picker_width, &yco, C);
+
   ui_colorpicker_hide_reveal(block);
+}
+
+/* Simplified palette integration for color picker popup */
+static void ui_colorpicker_palette(Block *block,
+                                   ColorPicker *cpicker,
+                                   Button *from_but,
+                                   int picker_width,
+                                   int *yco_ptr,
+                                   bContext *C)
+{
+  if (!C || !block || !yco_ptr) {
+    return;
+  }
+
+  /* Get paint settings from active paint mode */
+  Paint *paint = BKE_paint_get_active_from_context(C);
+  if (!paint) {
+    return;
+  }
+
+  /* Create layout for palette */
+  const uiStyle *style = style_get_dpi();
+  Layout &layout = block_layout(block,
+                                LayoutDirection::Vertical,
+                                LayoutType::Panel,
+                                0,
+                                *yco_ptr,
+                                picker_width,
+                                UI_UNIT_Y,
+                                0,
+                                style);
+  block_layout_set_current(block, &layout);
+
+  /* Create RNA pointer for paint settings */
+  Scene *scene = CTX_data_scene(C);
+  ToolSettings *tool_settings = CTX_data_tool_settings(C);
+  if (!scene || !tool_settings) {
+    return;
+  }
+
+  PointerRNA paint_ptr;
+  PaintMode mode = BKE_paintmode_get_active_from_context(C);
+  
+  switch (mode) {
+    case PaintMode::Sculpt:
+      if (tool_settings->sculpt) {
+        paint_ptr = RNA_pointer_create_discrete(&scene->id, &RNA_Sculpt, (void *)tool_settings->sculpt);
+      } else {
+        return;
+      }
+      break;
+    case PaintMode::Vertex:
+      if (tool_settings->vpaint) {
+        paint_ptr = RNA_pointer_create_discrete(&scene->id, &RNA_VertexPaint, (void *)tool_settings->vpaint);
+      } else {
+        return;
+      }
+      break;
+    case PaintMode::Texture2D:
+    case PaintMode::Texture3D:
+      paint_ptr = RNA_pointer_create_discrete(&scene->id, &RNA_ImagePaint, (void *)&tool_settings->imapaint.paint);
+      break;
+    default:
+      /* Weight paint and other modes don't use color palettes */
+      return;
+  }
+
+  /* Use our enhanced template */
+  template_colorpicker_palette(&layout, &paint_ptr, "palette");
+
+  /* Resolve layout - this will calculate the final size and position */
+  int2 resolved_size = block_layout_resolve(block);
+  
+  /* Update yco to position next elements below the palette */
+  if (resolved_size.y > 0) {
+    *yco_ptr -= resolved_size.y;
+  }
 }
 
 static int ui_colorpicker_wheel_cb(const bContext * /*C*/, Block *block, const wmEvent *event)
@@ -1099,6 +1237,9 @@ Block *block_func_COLOR(bContext *C, PopupBlockHandle *handle, void *arg_but)
   }
 
   copy_v3_v3(handle->retvec, but->editvec);
+
+  /* Set dummy panel for layout panels support in popup (required before creating layout) */
+  popup_dummy_panel_set(handle->region, block);
 
   block_colorpicker(C, block, but, handle->retvec, true);
 

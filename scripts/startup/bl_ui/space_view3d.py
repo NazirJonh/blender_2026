@@ -30,6 +30,16 @@ from bpy.app.translations import (
     contexts as i18n_contexts,
 )
 
+# Register RNA property for palette size toggle state (session-persistent)
+# This property will be added to WindowManager to store state like DNA in session
+if not hasattr(bpy.types.WindowManager, "palette_large_buttons"):
+    bpy.types.WindowManager.palette_large_buttons = bpy.props.BoolProperty(
+        name="Palette Large Buttons",
+        description="Use larger color swatches in palette",
+        default=False,
+        options={'SKIP_SAVE'}  # Don't save to file, only session-persistent
+    )
+
 
 class VIEW3D_HT_tool_header(Header):
     bl_space_type = 'VIEW_3D'
@@ -8707,6 +8717,15 @@ class VIEW3D_PT_paint_vertex_context_menu(Panel):
             slider=True,
         )
 
+        # Color Palette section
+        if capabilities.has_color:
+            settings = context.tool_settings.vertex_paint
+            layout.separator()
+
+            # Use template_colorpicker_palette which creates fixed-size buttons with proper callbacks
+            # Panel will show palette selector even if no palette exists yet
+            layout.template_colorpicker_palette(settings, "palette")
+
 
 class VIEW3D_PT_paint_texture_context_menu(Panel):
     # Only for popover, these are dummy values.
@@ -8745,6 +8764,15 @@ class VIEW3D_PT_paint_texture_context_menu(Panel):
                 pressure_name="use_pressure_strength",
                 slider=True,
             )
+
+        # Color Palette section
+        if capabilities.has_color:
+            settings = context.tool_settings.image_paint
+            layout.separator()
+
+            # Use template_colorpicker_palette which creates fixed-size buttons with proper callbacks
+            # Panel will show palette selector even if no palette exists yet
+            layout.template_colorpicker_palette(settings, "palette")
 
 
 class VIEW3D_PT_paint_weight_context_menu(Panel):
@@ -9174,6 +9202,76 @@ class VIEW3D_AST_brush_gpencil_weight(AssetShelfHiddenByDefault, View3DAssetShel
     brush_type_prop = "gpencil_weight_brush_type"
 
 
+# Palette Size Toggle Operator
+class PALETTE_OT_size_toggle(bpy.types.Operator):
+    """Toggle palette color swatch size"""
+    bl_idname = "palette.size_toggle"
+    bl_label = "Toggle Palette Size"
+    bl_options = {'INTERNAL'}
+
+    def execute(self, context):
+        # Toggle state stored in WindowManager (session-persistent like DNA)
+        context.window_manager.palette_large_buttons = not context.window_manager.palette_large_buttons
+        
+        # Trigger popup refresh by returning UPDATE
+        # This ensures the popup redraws after the toggle
+        return {'FINISHED'}
+
+
+# Enhanced Color Palette Context Menu
+class VIEW3D_MT_palette_context_menu(bpy.types.Menu):
+    """Context menu for color palette operations"""
+    bl_label = "Palette"
+    bl_idname = "VIEW3D_MT_palette_context_menu"
+
+    def draw(self, context):
+        layout = self.layout
+
+        # Add Color
+        layout.operator("palette.color_add", text="Add Color", icon='ADD')
+
+        # Remove Color
+        layout.operator("palette.color_delete", text="Remove Color", icon='REMOVE')
+
+        layout.separator()
+
+        # Move operations
+        op = layout.operator("palette.color_move", text="Move Up", icon='TRIA_UP')
+        op.type = 'UP'
+        op = layout.operator("palette.color_move", text="Move Down", icon='TRIA_DOWN')
+        op.type = 'DOWN'
+
+        layout.separator()
+
+        # Sort submenu
+        layout.menu("VIEW3D_MT_palette_sort", text="Sort", icon='SORTSIZE')
+
+        layout.separator()
+
+        # Palette operations
+        layout.operator("palette.new", text="New Palette", icon='FILE_NEW')
+
+
+class VIEW3D_MT_palette_sort(bpy.types.Menu):
+    """Submenu for palette sorting options"""
+    bl_label = "Sort Palette"
+
+    def draw(self, context):
+        layout = self.layout
+
+        op = layout.operator("palette.sort", text="By Hue")
+        op.type = 'HSV'
+        
+        op = layout.operator("palette.sort", text="By Saturation")
+        op.type = 'SVH'
+        
+        op = layout.operator("palette.sort", text="By Value")
+        op.type = 'VHS'
+        
+        op = layout.operator("palette.sort", text="By Luminance")
+        op.type = 'LUMINANCE'
+
+
 classes = (
     VIEW3D_HT_header,
     VIEW3D_HT_tool_header,
@@ -9443,6 +9541,9 @@ classes = (
     VIEW3D_PT_greasepencil_sculpt_context_menu,
     VIEW3D_PT_greasepencil_vertex_paint_context_menu,
     VIEW3D_PT_greasepencil_weight_context_menu,
+    VIEW3D_MT_palette_context_menu,
+    VIEW3D_MT_palette_sort,
+    PALETTE_OT_size_toggle,
 )
 
 
