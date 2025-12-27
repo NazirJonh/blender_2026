@@ -1136,12 +1136,16 @@ PopupBlockHandle *popup_block_create(bContext *C,
 
 void popup_block_free(bContext *C, PopupBlockHandle *handle)
 {
+  if (handle == nullptr) {
+    return;
+  }
+
   bool is_submenu = false;
 
   /* If this popup is created from a popover which does NOT have keep-open flag set,
    * then close the popover too. We could extend this to other popup types too. */
   ARegion *region = handle->popup_create_vars.butregion;
-  if (region != nullptr) {
+  if (region != nullptr && region->runtime != nullptr) {
     LISTBASE_FOREACH (Block *, block, &region->runtime->uiblocks) {
       if (block->handle && (block->flag & BLOCK_POPOVER) && (block->flag & BLOCK_KEEP_OPEN) == 0) {
         PopupBlockHandle *menu = block->handle;
@@ -1163,12 +1167,16 @@ void popup_block_free(bContext *C, PopupBlockHandle *handle)
     handle->popup_create_vars.arg_free(handle->popup_create_vars.arg);
   }
 
-  if (handle->region->runtime->popup_block_panel) {
-    BKE_panel_free(handle->region->runtime->popup_block_panel);
-    handle->region->runtime->popup_block_panel = nullptr;
+  if (handle->region != nullptr && handle->region->runtime != nullptr) {
+    if (handle->region->runtime->popup_block_panel) {
+      BKE_panel_free(handle->region->runtime->popup_block_panel);
+      handle->region->runtime->popup_block_panel = nullptr;
+    }
   }
 
-  ui_popup_block_remove(C, handle);
+  if (handle->region != nullptr) {
+    ui_popup_block_remove(C, handle);
+  }
 
   MEM_delete(handle);
 }
