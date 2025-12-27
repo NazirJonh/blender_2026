@@ -20,6 +20,7 @@
 #include "BKE_screen.hh"
 
 #include "UI_view2d.hh"
+#include "UI_interface_c.hh"
 
 #include "RNA_access.hh"
 
@@ -775,7 +776,11 @@ Block *block_find_mouse_over(const ARegion *region, const wmEvent *event, bool o
 
 Button *region_find_active_but(ARegion *region)
 {
-  LISTBASE_FOREACH (Block *, block, &region->runtime->uiblocks) {
+  if (!region || !region->runtime) {
+    return nullptr;
+  }
+
+  LISTBASE_FOREACH_BACKWARD (Block *, block, &region->runtime->uiblocks) {
     Button *but = block_active_but_get(block);
     if (but) {
       return but;

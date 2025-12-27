@@ -69,27 +69,22 @@ static void template_ID_set_property_exec_fn(bContext *C, void *arg_template, vo
 
   /* ID */
   if (item) {
-    PointerRNA idptr = RNA_id_pointer_create(static_cast<ID *>(item));
+    ID *new_id = static_cast<ID *>(item);
+    PointerRNA idptr = RNA_id_pointer_create(new_id);
     RNA_property_pointer_set(&template_ui->ptr, template_ui->prop, idptr, nullptr);
     RNA_property_update(C, &template_ui->ptr, template_ui->prop);
 
-    /* If we're in a popup, trigger popup resize after ID selection.
-     * This ensures the popup size updates when a palette is selected. */
-    ARegion *region = CTX_wm_region(C);
-    if (region && region->regiondata) {
-      PopupBlockHandle *popup = static_cast<PopupBlockHandle *>(region->regiondata);
+    ARegion *region_for_refresh = CTX_wm_region_popup(C);
+    if (region_for_refresh == nullptr) {
+      region_for_refresh = CTX_wm_region(C);
+    }
+
+    if (region_for_refresh && region_for_refresh->regiondata) {
+      PopupBlockHandle *popup = static_cast<PopupBlockHandle *>(region_for_refresh->regiondata);
       if (popup && popup->can_refresh) {
-        /* Reset prev_block_rect to force popup resize.
-         * This matches the pattern used in ui_handle_layout_panel_header and
-         * ui_handle_menus_recursive for popup resizing. */
         BLI_rctf_init(&popup->prev_block_rect, 0, 0, 0, 0);
-
-        /* Set RETURN_UPDATE to trigger popup refresh.
-         * This signals the event handler to call popup_block_refresh. */
-        popup->menuretval = RETURN_UPDATE;
-
-        /* Tag region for refresh UI - this triggers popup_block_refresh */
-        ED_region_tag_refresh_ui(region);
+        popup->menuretval |= RETURN_UPDATE;
+        ED_region_tag_refresh_ui(region_for_refresh);
       }
     }
   }
