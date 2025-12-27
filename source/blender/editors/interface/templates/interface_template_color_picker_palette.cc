@@ -21,11 +21,13 @@
 #include "DNA_brush_types.h"
 #include "DNA_screen_types.h"
 #include "DNA_scene_types.h"
+#include "DNA_ID.h"
 
 #include "BKE_context.hh"
 #include "BKE_paint.hh"
 #include "BKE_brush.hh"
 #include "BKE_report.hh"
+#include "BKE_screen.hh"
 
 #include "RNA_access.hh"
 #include "RNA_prototypes.hh"
@@ -67,11 +69,144 @@ void template_colorpicker_palette(Layout *layout, PointerRNA *ptr, const StringR
     return;
   }
 
-  PanelLayout panel = layout->panel(C, "color_picker_palette", true);
+  /* Determine context-specific panel ID based on the owner type.
+   * This allows separate state for Paint modes vs Material/other contexts.
+   * 
+   * Strategy:
+   * 1. Check RNA struct identifier name for Paint-related types
+   * 2. Check if ptr->data is a Material ID (ID_MA)
+   * 3. Check owner ID code for Material (ID_MA)
+   * 4. Default to generic ID if context cannot be determined
+   */
+  std::string panel_id = "color_picker_palette";
+  const char *struct_id = RNA_struct_identifier(ptr->type);
+  
+  printf("[DEBUG] template_colorpicker_palette: struct_id='%s', propname='%s', ptr->data=%p, ptr->owner_id=%p\n", 
+         struct_id ? struct_id : "NULL", propname.c_str(), ptr->data, ptr->owner_id);
+  
+  /* Check if this is a Paint context by struct name */
+  if (struct_id) {
+    if (strstr(struct_id, "Paint") || strstr(struct_id, "Sculpt")) {
+      panel_id = "color_picker_palette_paint";
+    }
+    else if (strstr(struct_id, "Material")) {
+      panel_id = "color_picker_palette_material";
+    }
+  }
+  
+  /* Check if ptr->data is a Material ID (for Shader Editor) */
+  if (panel_id == "color_picker_palette" && ptr->data) {
+    ID *id = static_cast<ID *>(ptr->data);
+    if (id && GS(id->name) == ID_MA) {
+      panel_id = "color_picker_palette_material";
+    }
+  }
+  
+  /* Fallback: check owner ID code for Material */
+  if (panel_id == "color_picker_palette" && ptr->owner_id) {
+    const short idcode = GS(ptr->owner_id->name);
+    if (idcode == ID_MA) {
+      panel_id = "color_picker_palette_material";
+    }
+  }
+
+  /* Get the region where state should be stored.
+   * For popups (temporary regions), use a persistent region from the area instead.
+   * This ensures state persists between popup sessions. */
+  ARegion *popup_region = CTX_wm_region_popup(C);
+  bool is_in_popup = (popup_region != nullptr) || (block->handle != nullptr);
+  
+  Panel *state_panel = nullptr;
+  
+  /* Check if we're inside a popup */
+  if (is_in_popup) {
+    /* Get the actual popup region if available */
+    ARegion *actual_popup_region = popup_region;
+    if (!actual_popup_region && block->handle) {
+      PopupBlockHandle *popup_handle = static_cast<PopupBlockHandle *>(block->handle);
+      if (popup_handle) {
+        actual_popup_region = popup_handle->region;
+      }
+    }
+    
+    /* Try to get persistent region from area */
+    ScrArea *area = CTX_wm_area(C);
+    if (area) {
+      /* Find first non-temporary region in the area */
+      LISTBASE_FOREACH (ARegion *, region, &area->regionbase) {
+        if (region->regiontype != RGN_TYPE_TEMPORARY) {
+          /* Find or create root panel in persistent region */
+          LISTBASE_FOREACH (Panel *, panel, &region->panels) {
+            if (panel->type == nullptr) { /* Root panel has no type */
+              state_panel = panel;
+              break;
+            }
+          }
+          
+          if (state_panel) {
+            break;
+          }
+        }
+      }
+    }
+    
+    /* If no root panel found in persistent region, try to create one */
+    if (!state_panel && area) {
+      /* Find first persistent region to create root panel in */
+      LISTBASE_FOREACH (ARegion *, region, &area->regionbase) {
+        if (region->regiontype != RGN_TYPE_TEMPORARY) {
+          /* Create root panel if it doesn't exist */
+          Panel *root_panel = nullptr;
+          LISTBASE_FOREACH (Panel *, panel, &region->panels) {
+            if (panel->type == nullptr) {
+              root_panel = panel;
+              break;
+            }
+          }
+          
+          if (!root_panel) {
+            /* Create a root panel for this region */
+            root_panel = BKE_panel_new(nullptr);
+            BLI_addtail(&region->panels, root_panel);
+          }
+          
+          state_panel = root_panel;
+          break;
+        }
+      }
+    }
+    
+    if (!state_panel) {
+      state_panel = layout->root_panel();
+    }
+  }
+  else {
+    /* Use current layout's root panel for persistent regions */
+    state_panel = layout->root_panel();
+  }
+  
+  PanelLayout panel;
+  
+  if (state_panel && state_panel != layout->root_panel()) {
+    /* Use persistent panel for state storage (for popups) */
+    LayoutPanelState *state = BKE_panel_layout_panel_state_ensure(
+        state_panel, panel_id.c_str(), true);
+
+    PointerRNA state_ptr = RNA_pointer_create_discrete(nullptr, &RNA_LayoutPanelState, state);
+    panel = layout->panel_prop(C, &state_ptr, "is_open");
+  }
+  else {
+    /* Use default panel() for persistent regions or fallback */
+    panel = layout->panel(C, panel_id.c_str(), true);
+  }
+  
   panel.header->label(IFACE_("Color Palette"), ICON_COLOR);
   
-  /* Only show content if panel is open */
+  /* Header is always created, even when panel is closed.
+   * Only show content if panel is open */
   if (!panel.body) {
+    /* Don't return early - header needs to be in layout for clicks to work */
+    /* The header will be registered in layout_panels.headers during resolve */
     return;
   }
 
@@ -281,7 +416,6 @@ static void ui_colorpicker_palette_add_cb(bContext *C, void *but1, void *arg)
       }
       
       color_found = true;
-      printf("DEBUG: Palette Add: color from from_but (%.3f, %.3f, %.3f) [linear]\n", color[0], color[1], color[2]);
     }
   }
   
@@ -295,16 +429,8 @@ static void ui_colorpicker_palette_add_cb(bContext *C, void *but1, void *arg)
         if (brush_color) {
           copy_v3_v3(color, brush_color);
           color_found = true;
-          printf("DEBUG: Palette Add: color from paint (brush=%p, color=%.3f, %.3f, %.3f)\n", 
-                 brush, color[0], color[1], color[2]);
         }
       }
-      else {
-        printf("DEBUG: Palette Add: paint context found but NO BRUSH\n");
-      }
-    }
-    else {
-      printf("DEBUG: Palette Add: NO paint context for fallback\n");
     }
   }
   
@@ -312,18 +438,15 @@ static void ui_colorpicker_palette_add_cb(bContext *C, void *but1, void *arg)
   Palette *palette = nullptr;
   if (but->custom_data) {
     palette = static_cast<Palette *>(but->custom_data);
-    printf("DEBUG: Palette Add: palette from custom_data %p\n", palette);
   }
   else {
     Paint *paint = BKE_paint_get_active_from_context(C);
     if (paint && paint->palette) {
       palette = paint->palette;
-      printf("DEBUG: Palette Add: palette from paint %p\n", palette);
     }
   }
   
   if (!palette) {
-    printf("DEBUG: Palette Add: NO PALETTE FOUND\n");
     return;
   }
   
@@ -331,9 +454,6 @@ static void ui_colorpicker_palette_add_cb(bContext *C, void *but1, void *arg)
   if (color_found) {
     LISTBASE_FOREACH (PaletteColor *, existing_color, &palette->colors) {
       if (compare_v3v3(existing_color->color, color, 0.01f)) {
-        printf("DEBUG: Palette Add: DUPLICATE FOUND (%.3f, %.3f, %.3f) vs (%.3f, %.3f, %.3f)\n", 
-               existing_color->color[0], existing_color->color[1], existing_color->color[2],
-               color[0], color[1], color[2]);
         /* Show user feedback */
         wmWindowManager *wm = CTX_wm_manager(C);
         if (wm) {
