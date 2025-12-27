@@ -1137,7 +1137,7 @@ void panel_drag_collapse_handler_add(const bContext *C, const bool was_open);
 void panel_tag_search_filter_match(Panel *panel);
 /** Toggles layout panel open state and returns the new state. */
 bool ui_layout_panel_toggle_open(const bContext *C, LayoutPanelHeader *header);
-LayoutPanelHeader *layout_panel_header_under_mouse(const Panel &panel, const int my);
+LayoutPanelHeader *layout_panel_header_under_mouse(const Panel &panel, const int my, const ARegion *region = nullptr);
 /** Apply scroll to layout panels when the main panel is used in popups. */
 void layout_panel_popup_scroll_apply(Panel *panel, const float dy);
 

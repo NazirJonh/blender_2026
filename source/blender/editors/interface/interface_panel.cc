@@ -2082,44 +2082,63 @@ static void ui_do_drag(const bContext *C, const wmEvent *event, Panel *panel)
 /** \name Region Level Panel Interaction
  * \{ */
 
-LayoutPanelHeader *layout_panel_header_under_mouse(const Panel &panel, const int my)
+LayoutPanelHeader *layout_panel_header_under_mouse(const Panel &panel, const int my, const ARegion *region)
 {
   const Block *block = panel.runtime->block;
   if (!block) {
-    printf("[DEBUG] layout_panel_header_under_mouse: panel.runtime->block is null!\n");
     return nullptr;
   }
 
-  float relative_y = float(my - block->rect.ymax);
-
-  if (block->aspect != 0.0f && block->aspect != 1.0f) {
-    printf("[DEBUG] layout_panel_header_under_mouse: block->aspect=%.2f. Adjusting relative_y %.2f -> %.2f\n",
-           block->aspect, relative_y, relative_y / block->aspect);
-    relative_y /= block->aspect;
+  /* Calculate aspect ratio, accounting for view2d zoom in regions with view2d.
+   * For popups, use the same calculation as in popup_layout_panels_refresh_from_buttons.
+   * For regions with view2d, use view2d zoom ratio. */
+  float aspect = 1.0f;
+  if (block_is_popup_any(block)) {
+    /* Use the same calculation as in popup_layout_panels_refresh_from_buttons */
+    const float block_aspect = block->aspect;
+    aspect = (block_aspect != 0.0f && block_aspect != 1.0f) ? block_aspect : 1.0f;
+  }
+  else if (region && region->v2d.flag & V2D_IS_INIT) {
+    /* Account for view2d zoom (e.g., in Shader Editor, Image Editor, etc.) */
+    aspect = BLI_rctf_size_y(&region->v2d.cur) / (BLI_rcti_size_y(&region->v2d.mask) + 1);
   }
 
-  printf("[DEBUG] layout_panel_header_under_mouse: my=%d, block->rect.ymax=%.1f, relative_y=%.1f, headers=%zu\n",
-         my, block->rect.ymax, relative_y, panel.runtime->layout_panels.headers.size());
+  /* Calculate relative_y in layout space.
+   * Headers are registered with coordinates: (but->rect.ymin - block->rect.ymax) / aspect
+   * So we need to use the same formula for mouse coordinates. */
+  float relative_y = float(my - block->rect.ymax);
 
+  if (aspect != 1.0f) {
+    relative_y /= aspect;
+  }
+
+  /* Check click against panel bodies first (for open panels), then headers (for closed panels).
+   * Visual layout uses body coordinates when panel is open, header coordinates when closed. */
+  for (const int i : panel.runtime->layout_panels.bodies.index_range()) {
+    const LayoutPanelBody &body = panel.runtime->layout_panels.bodies[i];
+    if (IN_RANGE(relative_y, body.start_y, body.end_y)) {
+      /* Return corresponding header */
+      if (i < panel.runtime->layout_panels.headers.size()) {
+        return &panel.runtime->layout_panels.headers[i];
+      }
+    }
+  }
+
+  /* For closed panels (no bodies), check headers directly using their original coordinates */
   for (LayoutPanelHeader &header : panel.runtime->layout_panels.headers) {
-    printf("[DEBUG] layout_panel_header_under_mouse: Header range [%.1f, %.1f], checking if %.1f in range\n",
-           header.start_y, header.end_y, relative_y);
-
     if (IN_RANGE(relative_y, header.start_y, header.end_y)) {
-      printf("[DEBUG] layout_panel_header_under_mouse: Found header! relative_y=%.1f is in [%.1f, %.1f]\n",
-             relative_y, header.start_y, header.end_y);
       return &header;
     }
   }
 
-  printf("[DEBUG] layout_panel_header_under_mouse: No header found (relative_y=%.1f not in any range)\n", relative_y);
   return nullptr;
 }
 
 static PanelMouseState ui_panel_mouse_state_get(const Block *block,
                                                 const Panel *panel,
                                                 const int mx,
-                                                const int my)
+                                                const int my,
+                                                const ARegion *region = nullptr)
 {
   if (!IN_RANGE(float(mx), block->rect.xmin, block->rect.xmax)) {
     return PANEL_MOUSE_OUTSIDE;
@@ -2128,7 +2147,7 @@ static PanelMouseState ui_panel_mouse_state_get(const Block *block,
   if (IN_RANGE(float(my), block->rect.ymax, block->rect.ymax + PNL_HEADER)) {
     return PANEL_MOUSE_INSIDE_HEADER;
   }
-  if (layout_panel_header_under_mouse(*panel, my) != nullptr) {
+  if (layout_panel_header_under_mouse(*panel, my, region) != nullptr) {
     return PANEL_MOUSE_INSIDE_LAYOUT_PANEL_HEADER;
   }
 
@@ -2287,17 +2306,13 @@ bool ui_layout_panel_toggle_open(const bContext *C, LayoutPanelHeader *header)
   /* Check if header has valid open_owner_ptr before using it.
    * Headers created for additional header buttons may have invalid pointers. */
   if (!header->open_owner_ptr.data || header->open_prop_name.empty()) {
-    printf("[DEBUG] ui_layout_panel_toggle_open: Invalid header, open_owner_ptr.data=%p, open_prop_name='%s'\n",
-           header->open_owner_ptr.data, header->open_prop_name.c_str());
     return false;
   }
 
   const bool is_open = RNA_boolean_get(&header->open_owner_ptr, header->open_prop_name.c_str());
-  printf("[DEBUG] ui_layout_panel_toggle_open: Current state is_open=%d\n", is_open);
 
   RNA_boolean_set(&header->open_owner_ptr, header->open_prop_name.c_str(), !is_open);
   const bool new_state = RNA_boolean_get(&header->open_owner_ptr, header->open_prop_name.c_str());
-  printf("[DEBUG] ui_layout_panel_toggle_open: New state new_state=%d\n", new_state);
 
   PropertyRNA *prop = RNA_struct_find_property(&header->open_owner_ptr, header->open_prop_name.c_str());
   if (prop) {
@@ -2315,12 +2330,12 @@ static void ui_handle_layout_panel_header(
   Panel *panel = block->panel;
   BLI_assert(panel->type != nullptr);
 
-  LayoutPanelHeader *header = layout_panel_header_under_mouse(*panel, my);
+  ARegion *region = CTX_wm_region_popup(C);
+  LayoutPanelHeader *header = layout_panel_header_under_mouse(*panel, my, region);
   if (header == nullptr) {
     return;
   }
   const bool new_state = ui_layout_panel_toggle_open(C, header);
-  ARegion *region = CTX_wm_region_popup(C);
   if (!region) {
     region = CTX_wm_region(C);
   }
@@ -2760,7 +2775,7 @@ int handler_panel_region(bContext *C,
     int my = event->xy[1];
     window_to_block(region, block, &mx, &my);
 
-    const PanelMouseState mouse_state = ui_panel_mouse_state_get(block, panel, mx, my);
+    const PanelMouseState mouse_state = ui_panel_mouse_state_get(block, panel, mx, my, region);
 
     if (has_panel_header && mouse_state != PANEL_MOUSE_OUTSIDE) {
       /* Mark panels that have been interacted with so their expansion

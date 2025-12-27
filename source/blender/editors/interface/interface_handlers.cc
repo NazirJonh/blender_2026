@@ -12068,7 +12068,7 @@ static int ui_handle_menus_recursive(bContext *C,
         if (!IN_RANGE(float(mx), block->rect.xmin, block->rect.xmax)) {
           break;
         }
-        LayoutPanelHeader *header = layout_panel_header_under_mouse(*block->panel, my);
+        LayoutPanelHeader *header = layout_panel_header_under_mouse(*block->panel, my, menu->region);
         if (header) {
           /* Reset prev_block_rect to force popup resize. */
           BLI_rctf_init(&menu->prev_block_rect, 0, 0, 0, 0);
@@ -12544,7 +12544,7 @@ static int ui_popup_handler(bContext *C, const wmEvent *event, void *userdata)
         if (IN_RANGE(float(event->xy[0]), panel_block->rect.xmin, panel_block->rect.xmax) &&
             IN_RANGE(float(event->xy[1]), panel_block->rect.ymin, panel_block->rect.ymax)) {
           printf("[DEBUG] ui_popup_handler: Mouse is in block %p, checking for header\n", panel_block);
-          header = layout_panel_header_under_mouse(*popup_panel, search_my_window);
+          header = layout_panel_header_under_mouse(*popup_panel, search_my_window, region);
           if (header) {
             printf("[DEBUG] ui_popup_handler: Found header in popup_block_panel!\n");
           }
@@ -12566,7 +12566,7 @@ static int ui_popup_handler(bContext *C, const wmEvent *event, void *userdata)
           /* Check if mouse is in this block's rect (rect is in window space). */
           if (IN_RANGE(float(event->xy[0]), search_block->rect.xmin, search_block->rect.xmax) &&
               IN_RANGE(float(event->xy[1]), search_block->rect.ymin, search_block->rect.ymax)) {
-            header = layout_panel_header_under_mouse(*search_block->panel, search_my_window);
+            header = layout_panel_header_under_mouse(*search_block->panel, search_my_window, region);
             if (header) {
               printf("[DEBUG] ui_popup_handler: Found header in block %p!\n", search_block);
               break;
