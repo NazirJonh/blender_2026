@@ -34,6 +34,8 @@
 #include "UI_interface_c.hh"
 #include "interface_intern.hh"
 
+#include "IMB_colormanagement.hh"
+
 #include "WM_api.hh"
 #include "WM_types.hh"
 
@@ -48,7 +50,6 @@ static bool palette_large_buttons = false;
 static void ui_colorpicker_palette_add_cb(bContext *C, void *but1, void *arg);
 static void ui_colorpicker_palette_delete_cb(bContext *C, void *but1, void *arg);
 static void ui_colorpicker_palette_size_toggle_cb(bContext *C, void *but1, void *arg);
-static void ui_colorpicker_palette_color_apply_cb(bContext *C, void *arg1, void * /*arg2*/);
 
 void template_colorpicker_palette(Layout *layout, PointerRNA *ptr, const StringRefNull propname)
 {
@@ -66,21 +67,13 @@ void template_colorpicker_palette(Layout *layout, PointerRNA *ptr, const StringR
     return;
   }
 
-  /* Panel is closed by default in all contexts (including context menus) */
-  /* User can expand it by clicking on the header */
-  const bool default_closed = true;
-  
-  PanelLayout panel = layout->panel(C, "color_picker_palette", default_closed);
-  printf("[DEBUG] template_colorpicker_palette: Created panel, header=%p, body=%p, default_closed=%s\n",
-         panel.header, panel.body, default_closed ? "true" : "false");
+  PanelLayout panel = layout->panel(C, "color_picker_palette", true);
   panel.header->label(IFACE_("Color Palette"), ICON_COLOR);
   
   /* Only show content if panel is open */
   if (!panel.body) {
-    printf("[DEBUG] template_colorpicker_palette: Panel body is null, returning\n");
     return;
   }
-  printf("[DEBUG] template_colorpicker_palette: Panel body is not null, continuing\n");
 
   const PointerRNA cptr = RNA_property_pointer_get(ptr, prop);
   
@@ -101,7 +94,7 @@ void template_colorpicker_palette(Layout *layout, PointerRNA *ptr, const StringR
   Layout *button_row = &col->row(false);
   
   /* Left side: Add/Delete buttons */
-  Layout *left_buttons = &button_row->row(true);
+  button_row->row(true);
   
   /* Add/Delete buttons with callbacks for popup update */
   /* Use regular buttons with callbacks instead of operator buttons to ensure
@@ -220,9 +213,6 @@ void template_colorpicker_palette(Layout *layout, PointerRNA *ptr, const StringR
       color_but->is_pallete_color = true;
       color_but->palette_color_index = col_id;
 
-      /* Set callback to apply color to brush when clicked */
-      button_func_set(color_but, ui_colorpicker_palette_color_apply_cb, color, nullptr);
-
       /* Check if this is the active color (visual indicator) */
       if (paint && paint->brush) {
         if (fabsf(color->rgb[0] - current_brush_color[0]) < 0.01f &&
@@ -250,67 +240,52 @@ static void ui_colorpicker_palette_add_cb(bContext *C, void *but1, void *arg)
     return;
   }
   
-  /* Get popup handle to access color picker data */
   PopupBlockHandle *popup = block->handle;
   if (!popup) {
-    ARegion *region = CTX_wm_region(C);
+    ARegion *region = CTX_wm_region_popup(C);
+    if (!region) {
+      region = CTX_wm_region(C);
+    }
     if (region && region->regiondata) {
       popup = static_cast<PopupBlockHandle *>(region->regiondata);
     }
   }
-  
-  /* Get palette first - needed for all operations */
-  Palette *palette = nullptr;
-  if (but->custom_data) {
-    palette = static_cast<Palette *>(but->custom_data);
-  }
-  else {
-    Paint *paint = BKE_paint_get_active_from_context(C);
-    if (paint && paint->palette) {
-      palette = paint->palette;
-    }
-  }
-  
-  if (!palette) {
-    printf("[DEBUG] ui_colorpicker_palette_add_cb: no palette found\n");
-    return;
-  }
-  
-  /* Get color - try multiple sources in order of priority */
+
   float color[3] = {0.0f, 0.0f, 0.0f};
   bool color_found = false;
-  
-  /* Priority 1: Get color from original button that opened color picker (if in color picker popup) */
-  if (popup && popup->popup_create_vars.but) {
-    Button *from_but = popup->popup_create_vars.but;
-    float rgba[4] = {0.0f, 0.0f, 0.0f, 1.0f};
-    
-    /* Use button_v4_get to get color with alpha - it handles all cases (RNA, editvec, etc.)
-     * and returns color in scene linear space (which is what palette expects) */
-    button_v4_get(from_but, rgba);
-    
-    /* Check if color is valid (not all zeros) */
-    if (rgba[0] != 0.0f || rgba[1] != 0.0f || rgba[2] != 0.0f) {
-      /* Extract RGB (alpha is not stored in PaletteColor, only RGB) */
-      copy_v3_v3(color, rgba);
-      color_found = true;
-      printf("[DEBUG] ui_colorpicker_palette_add_cb: got color from button: %.3f, %.3f, %.3f (alpha: %.3f)\n",
-             color[0], color[1], color[2], rgba[3]);
-    }
-  }
-  
-  /* Priority 2: Try popup retvec (current color picker value) - but only if valid */
-  if (!color_found && popup) {
-    /* Check if retvec contains valid color (not all zeros) */
+
+  const bool is_color_picker_popup = (block->color_pickers.list.first != nullptr);
+
+  if (popup && is_color_picker_popup) {
+    /* Only use retvec if it's not zero or if we are sure it's from a real picker.
+     * In context menus, retvec is often zero. */
     if (popup->retvec[0] != 0.0f || popup->retvec[1] != 0.0f || popup->retvec[2] != 0.0f) {
       copy_v3_v3(color, popup->retvec);
       color_found = true;
-      printf("[DEBUG] ui_colorpicker_palette_add_cb: got color from popup->retvec: %.3f, %.3f, %.3f (alpha: %.3f)\n",
-             color[0], color[1], color[2], popup->retvec[3]);
+      printf("DEBUG: Palette Add: color from retvec (%.3f, %.3f, %.3f)\n", color[0], color[1], color[2]);
+    }
+  }
+
+  if (!color_found && popup && popup->popup_create_vars.but) {
+    Button *from_but = popup->popup_create_vars.but;
+    if (from_but->rnaprop &&
+        ELEM(RNA_property_subtype(from_but->rnaprop), PROP_COLOR, PROP_COLOR_GAMMA))
+    {
+      float rgba[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+      button_v4_get(from_but, rgba);
+      copy_v3_v3(color, rgba);
+      
+      /* Palette colors are stored in scene linear space. */
+      if (RNA_property_subtype(from_but->rnaprop) == PROP_COLOR_GAMMA) {
+        IMB_colormanagement_srgb_to_scene_linear_v3(color, color);
+      }
+      
+      color_found = true;
+      printf("DEBUG: Palette Add: color from from_but (%.3f, %.3f, %.3f) [linear]\n", color[0], color[1], color[2]);
     }
   }
   
-  /* Priority 3: Get color from active brush (for paint modes, including context menu) */
+  /* Fallback: try to get color from paint context (for paint modes) */
   if (!color_found) {
     Paint *paint = BKE_paint_get_active_from_context(C);
     if (paint) {
@@ -320,19 +295,45 @@ static void ui_colorpicker_palette_add_cb(bContext *C, void *but1, void *arg)
         if (brush_color) {
           copy_v3_v3(color, brush_color);
           color_found = true;
-          printf("[DEBUG] ui_colorpicker_palette_add_cb: got color from brush: %.3f, %.3f, %.3f\n",
-                 color[0], color[1], color[2]);
+          printf("DEBUG: Palette Add: color from paint (brush=%p, color=%.3f, %.3f, %.3f)\n", 
+                 brush, color[0], color[1], color[2]);
         }
       }
+      else {
+        printf("DEBUG: Palette Add: paint context found but NO BRUSH\n");
+      }
     }
+    else {
+      printf("DEBUG: Palette Add: NO paint context for fallback\n");
+    }
+  }
+  
+  /* Get palette - try from button custom_data first, then from paint context */
+  Palette *palette = nullptr;
+  if (but->custom_data) {
+    palette = static_cast<Palette *>(but->custom_data);
+    printf("DEBUG: Palette Add: palette from custom_data %p\n", palette);
+  }
+  else {
+    Paint *paint = BKE_paint_get_active_from_context(C);
+    if (paint && paint->palette) {
+      palette = paint->palette;
+      printf("DEBUG: Palette Add: palette from paint %p\n", palette);
+    }
+  }
+  
+  if (!palette) {
+    printf("DEBUG: Palette Add: NO PALETTE FOUND\n");
+    return;
   }
   
   /* Check if color already exists in palette */
   if (color_found) {
     LISTBASE_FOREACH (PaletteColor *, existing_color, &palette->colors) {
-      if (compare_v3v3(existing_color->color, color, 0.001f)) {
-        printf("[DEBUG] Color already exists in palette - not adding\n");
-        
+      if (compare_v3v3(existing_color->color, color, 0.01f)) {
+        printf("DEBUG: Palette Add: DUPLICATE FOUND (%.3f, %.3f, %.3f) vs (%.3f, %.3f, %.3f)\n", 
+               existing_color->color[0], existing_color->color[1], existing_color->color[2],
+               color[0], color[1], color[2]);
         /* Show user feedback */
         wmWindowManager *wm = CTX_wm_manager(C);
         if (wm) {
@@ -358,13 +359,10 @@ static void ui_colorpicker_palette_add_cb(bContext *C, void *but1, void *arg)
     if (color_found) {
       copy_v3_v3(palcol->color, color);
       palcol->value = 0.0f;
-      printf("[DEBUG] ui_colorpicker_palette_add_cb: added color to palette: %.3f, %.3f, %.3f\n",
-             palcol->color[0], palcol->color[1], palcol->color[2]);
     }
   }
   
   if (!popup || !popup->can_refresh) {
-    printf("[DEBUG] ui_colorpicker_palette_add_cb: popup handle not found or can_refresh=false\n");
     return;
   }
   
@@ -378,14 +376,12 @@ static void ui_colorpicker_palette_add_cb(bContext *C, void *but1, void *arg)
   block->bounds_type = BLOCK_BOUNDS_POPUP_MOUSE;
   
   /* Set RETURN_UPDATE to trigger popup refresh */
-  popup->menuretval = RETURN_UPDATE;
+  popup->menuretval |= RETURN_UPDATE;
   
   /* Tag region for refresh UI - this triggers popup_block_refresh */
   if (popup->region) {
     ED_region_tag_refresh_ui(popup->region);
   }
-  
-  printf("[DEBUG] ui_colorpicker_palette_add_cb: called operator and triggered popup refresh\n");
 }
 
 /* Callback function for Delete button - calls operator and triggers popup refresh */
@@ -413,7 +409,6 @@ static void ui_colorpicker_palette_delete_cb(bContext *C, void *but1, void *arg)
     }
   }
   if (!popup || !popup->can_refresh) {
-    printf("[DEBUG] ui_colorpicker_palette_delete_cb: popup handle not found or can_refresh=false\n");
     return;
   }
   
@@ -433,8 +428,6 @@ static void ui_colorpicker_palette_delete_cb(bContext *C, void *but1, void *arg)
   if (popup->region) {
     ED_region_tag_refresh_ui(popup->region);
   }
-  
-  printf("[DEBUG] ui_colorpicker_palette_delete_cb: called operator and triggered popup refresh\n");
 }
 
 /* Callback function for Size toggle button - toggles button size and triggers popup refresh */
@@ -459,7 +452,6 @@ static void ui_colorpicker_palette_size_toggle_cb(bContext *C, void *but1, void 
     }
   }
   if (!popup || !popup->can_refresh) {
-    printf("[DEBUG] ui_colorpicker_palette_size_toggle_cb: popup handle not found or can_refresh=false\n");
     return;
   }
   
@@ -478,57 +470,6 @@ static void ui_colorpicker_palette_size_toggle_cb(bContext *C, void *but1, void 
   /* Tag region for refresh UI - this triggers popup_block_refresh */
   if (popup->region) {
     ED_region_tag_refresh_ui(popup->region);
-  }
-  
-  printf("[DEBUG] ui_colorpicker_palette_size_toggle_cb: toggled button size and triggered popup refresh\n");
-}
-
-/* Callback function for applying palette color to brush */
-static void ui_colorpicker_palette_color_apply_cb(bContext *C, void *arg1, void * /*arg2*/)
-{
-  if (!C || !arg1) {
-    return;
-  }
-
-  PaletteColor *palette_color = static_cast<PaletteColor *>(arg1);
-
-  /* Get current paint settings */
-  Paint *paint = BKE_paint_get_active_from_context(C);
-  if (!paint || !paint->brush) {
-    return;
-  }
-
-  Scene *scene = CTX_data_scene(C);
-  if (!scene) {
-    return;
-  }
-
-  /* Apply palette color to brush */
-  /* Use BKE_brush_color_set to handle unified color settings correctly */
-  /* palette_color->color is a float[3] array */
-  BKE_brush_color_set(paint, paint->brush, palette_color->color);
-
-  /* Update active palette color index */
-  if (paint->palette) {
-    int color_index = 0;
-    LISTBASE_FOREACH (PaletteColor *, color, &paint->palette->colors) {
-      if (color == palette_color) {
-        paint->palette->active_color = color_index;
-        break;
-      }
-      color_index++;
-    }
-  }
-
-  /* Send notifications for updates */
-  WM_event_add_notifier(C, NC_BRUSH | ND_DATA, paint->brush);
-  WM_event_add_notifier(C, NC_BRUSH | NA_EDITED, paint->brush);
-  WM_event_add_notifier(C, NC_SCENE | ND_TOOLSETTINGS, nullptr);
-
-  /* Force UI update */
-  ARegion *region = CTX_wm_region(C);
-  if (region) {
-    ED_region_tag_redraw(region);
   }
 }
 
