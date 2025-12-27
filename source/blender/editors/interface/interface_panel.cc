@@ -1187,15 +1187,29 @@ void draw_layout_panels_backdrop(const ARegion *region,
                                  const float radius,
                                  float subpanel_backcolor[4])
 {
-  /* Draw backdrops for layout panels. */
-  const float aspect = block_is_popup_any(panel->runtime->block) ? panel->runtime->block->aspect :
-                                                                   1.0f;
+  /* Calculate aspect ratio, accounting for view2d zoom in regions with view2d.
+   * For popups, use the same calculation as in popup_layout_panels_refresh_from_buttons.
+   * For regions with view2d, use view2d zoom ratio. */
+  float aspect = 1.0f;
+  if (block_is_popup_any(panel->runtime->block)) {
+    /* Use the same calculation as in popup_layout_panels_refresh_from_buttons */
+    const float block_aspect = panel->runtime->block->aspect;
+    aspect = (block_aspect != 0.0f && block_aspect != 1.0f) ? block_aspect : 1.0f;
+  }
+  else if (region->v2d.flag & V2D_IS_INIT) {
+    /* Account for view2d zoom (e.g., in Shader Editor, Image Editor, etc.) */
+    aspect = BLI_rctf_size_y(&region->v2d.cur) / (BLI_rcti_size_y(&region->v2d.mask) + 1);
+  }
 
-  for (const LayoutPanelBody &body : panel->runtime->layout_panels.bodies) {
+  /* Draw backdrop for open panels (using body coordinates) */
+  for (const int body_index : panel->runtime->layout_panels.bodies.index_range()) {
+    const LayoutPanelBody &body = panel->runtime->layout_panels.bodies[body_index];
 
     rctf panel_blockspace = panel->runtime->block->rect;
-    panel_blockspace.ymax = panel->runtime->block->rect.ymax + body.end_y;
-    panel_blockspace.ymin = panel->runtime->block->rect.ymax + body.start_y;
+    /* body.start_y and body.end_y are in layout space (divided by aspect in popup_layout_panels_refresh_from_buttons),
+     * convert to window space by multiplying by aspect */
+    panel_blockspace.ymax = panel->runtime->block->rect.ymax + body.end_y * aspect;
+    panel_blockspace.ymin = panel->runtime->block->rect.ymax + body.start_y * aspect;
 
     if (panel_blockspace.ymax <= panel->runtime->block->rect.ymin) {
       /* Layout panels no longer fits in block rectangle, stop drawing backdrops. */
@@ -1222,6 +1236,9 @@ void draw_layout_panels_backdrop(const ARegion *region,
     BLI_rctf_rcti_copy(&panel_pixelspacef, &panel_pixelspace);
     draw_roundbox_4fv(&panel_pixelspacef, true, radius, subpanel_backcolor);
   }
+
+  /* Note: We don't draw backdrop for closed panels - only for open panels with bodies.
+   * Closed panels should not have a background, only the header button is visible. */
 }
 
 void draw_layout_panels_outline(const ARegion *region,
@@ -1234,14 +1251,28 @@ void draw_layout_panels_outline(const ARegion *region,
     return; /* No outline to draw. */
   }
 
-  const float aspect = block_is_popup_any(panel->runtime->block) ? panel->runtime->block->aspect :
-                                                                   1.0f;
+  /* Calculate aspect ratio, accounting for view2d zoom in regions with view2d.
+   * For popups, use the same calculation as in popup_layout_panels_refresh_from_buttons.
+   * For regions with view2d, use view2d zoom ratio. */
+  float aspect = 1.0f;
+  if (block_is_popup_any(panel->runtime->block)) {
+    /* Use the same calculation as in popup_layout_panels_refresh_from_buttons */
+    const float block_aspect = panel->runtime->block->aspect;
+    aspect = (block_aspect != 0.0f && block_aspect != 1.0f) ? block_aspect : 1.0f;
+  }
+  else if (region->v2d.flag & V2D_IS_INIT) {
+    /* Account for view2d zoom (e.g., in Shader Editor, Image Editor, etc.) */
+    aspect = BLI_rctf_size_y(&region->v2d.cur) / (BLI_rcti_size_y(&region->v2d.mask) + 1);
+  }
 
-  for (const LayoutPanelBody &body : panel->runtime->layout_panels.bodies) {
+  for (const int body_index : panel->runtime->layout_panels.bodies.index_range()) {
+    const LayoutPanelBody &body = panel->runtime->layout_panels.bodies[body_index];
 
     rctf panel_blockspace = panel->runtime->block->rect;
-    panel_blockspace.ymax = panel->runtime->block->rect.ymax + body.end_y;
-    panel_blockspace.ymin = panel->runtime->block->rect.ymax + body.start_y;
+    /* body.start_y and body.end_y are in layout space (divided by aspect in popup_layout_panels_refresh_from_buttons),
+     * convert to window space by multiplying by aspect */
+    panel_blockspace.ymax = panel->runtime->block->rect.ymax + body.end_y * aspect;
+    panel_blockspace.ymin = panel->runtime->block->rect.ymax + body.start_y * aspect;
 
     if (panel_blockspace.ymax <= panel->runtime->block->rect.ymin) {
       /* Layout panels no longer fits in block rectangle, stop drawing outline. */
@@ -1266,6 +1297,8 @@ void draw_layout_panels_outline(const ARegion *region,
     rcti panel_pixelspace = ui_to_pixelrect(region, panel->runtime->block, &panel_blockspace);
     rctf panel_pixelspacef;
     BLI_rctf_rcti_copy(&panel_pixelspacef, &panel_pixelspace);
+    
+    
     draw_roundbox_4fv(&panel_pixelspacef, false, radius, outline_color);
   }
 }
